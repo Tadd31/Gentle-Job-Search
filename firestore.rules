@@ -1,0 +1,148 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}/profile/config
+    // Fields:
+    //   - keywords: string (required)
+    //   - location: string (required)
+    //   - linkedin_url: string (optional)
+    //   - min_salary: integer (optional)
+    //   - search_mode: string (enum: ['strict', 'discovery'])
+    //   - crawl_interval: integer (optional)
+    //
+    // Collection: /users/{userId}/sources/{sourceId}
+    // Fields:
+    //   - url: string (required)
+    //   - name: string (required)
+    //   - is_broken: boolean (optional)
+    //   - last_error: string (optional)
+    //   - last_crawled: timestamp (optional)
+    //   - jobs_found: integer (optional)
+    //
+    // Collection: /users/{userId}/jobs/{jobId}
+    // Fields:
+    //   - title: string (required)
+    //   - company: string (required)
+    //   - location: string (optional)
+    //   - link: string (required)
+    //   - source_url: string (optional)
+    //   - found_at: timestamp (optional)
+    //   - description: string (optional)
+    //   - status: string (enum: ['new', 'past', 'approved', 'rejected', 'applied'])
+    //   - is_recommendation: boolean (optional)
+    //   - salary: string (optional)
+    //   - seniority: string (optional)
+    //   - match_score: integer (optional)
+    //   - match_reason: string (optional)
+    //   - is_broken: boolean (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "c.tadd31@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidProfile(data) {
+      return hasRequiredFields(['keywords', 'location']) &&
+             data.keywords is string && data.keywords.size() < 500 &&
+             data.location is string && data.location.size() < 200 &&
+             (!('linkedin_url' in data) || isValidUrl(data.linkedin_url)) &&
+             (!('min_salary' in data) || data.min_salary is int) &&
+             (!('search_mode' in data) || data.search_mode in ['strict', 'discovery']) &&
+             (!('crawl_interval' in data) || data.crawl_interval is int);
+    }
+
+    function isValidSource(data) {
+      return hasRequiredFields(['url', 'name']) &&
+             isValidUrl(data.url) &&
+             data.name is string && data.name.size() < 100 &&
+             (!('is_broken' in data) || data.is_broken is bool) &&
+             (!('last_error' in data) || data.last_error is string) &&
+             (!('last_crawled' in data) || data.last_crawled is timestamp) &&
+             (!('jobs_found' in data) || data.jobs_found is int);
+    }
+
+    function isValidJob(data) {
+      return hasRequiredFields(['title', 'company', 'link', 'status']) &&
+             data.title is string && data.title.size() < 200 &&
+             data.company is string && data.company.size() < 200 &&
+             isValidUrl(data.link) &&
+             data.status in ['new', 'past', 'approved', 'rejected', 'applied'] &&
+             (!('location' in data) || data.location is string) &&
+             (!('source_url' in data) || isValidUrl(data.source_url)) &&
+             (!('found_at' in data) || data.found_at is timestamp) &&
+             (!('description' in data) || data.description is string) &&
+             (!('is_recommendation' in data) || data.is_recommendation is bool) &&
+             (!('salary' in data) || data.salary is string) &&
+             (!('seniority' in data) || data.seniority is string) &&
+             (!('match_score' in data) || data.match_score is int) &&
+             (!('match_reason' in data) || data.match_reason is string) &&
+             (!('is_broken' in data) || data.is_broken is bool);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+
+      match /profile/config {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin()) && isValidProfile(request.resource.data);
+      }
+
+      match /sources/{sourceId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin()) && isValidSource(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /jobs/{jobId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin()) && isValidJob(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

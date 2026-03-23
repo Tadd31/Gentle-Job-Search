@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User's search preferences and profile settings",
+      "type": "object",
+      "properties": {
+        "keywords": { "type": "string", "description": "Comma-separated search keywords" },
+        "location": { "type": "string", "description": "Preferred job location" },
+        "linkedin_url": { "type": "string", "description": "User's LinkedIn profile URL" },
+        "min_salary": { "type": "integer", "description": "Minimum annual salary in GBP" },
+        "search_mode": { "type": "string", "enum": ["strict", "discovery"], "description": "Search strategy mode" },
+        "crawl_interval": { "type": "integer", "description": "Days between crawls for a source" }
+      },
+      "required": ["keywords", "location"]
+    },
+    "JobSource": {
+      "title": "JobSource",
+      "description": "A website source for job listings",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "The URL of the job board or careers page" },
+        "name": { "type": "string", "description": "Display name of the source" },
+        "is_broken": { "type": "boolean", "description": "Whether the source link is currently unreachable" },
+        "last_error": { "type": "string", "description": "Last error message encountered during crawl" },
+        "last_crawled": { "type": "string", "format": "date-time", "description": "Timestamp of the last successful crawl" },
+        "jobs_found": { "type": "integer", "description": "Total number of jobs found from this source" }
+      },
+      "required": ["url", "name"]
+    },
+    "JobListing": {
+      "title": "JobListing",
+      "description": "A single job opportunity found by the scout",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Job title" },
+        "company": { "type": "string", "description": "Company name" },
+        "location": { "type": "string", "description": "Job location" },
+        "link": { "type": "string", "description": "Direct link to the job post" },
+        "source_url": { "type": "string", "description": "The source URL where this job was found" },
+        "found_at": { "type": "string", "format": "date-time", "description": "When the job was first discovered" },
+        "description": { "type": "string", "description": "Short summary of the job" },
+        "status": { "type": "string", "enum": ["new", "past", "approved", "rejected", "applied"], "description": "User's status for this job" },
+        "is_recommendation": { "type": "boolean", "description": "Whether this job was a discovery recommendation" },
+        "salary": { "type": "string", "description": "Salary information" },
+        "seniority": { "type": "string", "description": "Seniority level" },
+        "match_score": { "type": "integer", "description": "AI-generated match score (0-100)" },
+        "match_reason": { "type": "string", "description": "AI-generated reasoning for the match" },
+        "is_broken": { "type": "boolean", "description": "Whether the job link is currently unreachable" }
+      },
+      "required": ["title", "company", "link", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/profile/config": {
+      "schema": "UserProfile",
+      "description": "User's search configuration"
+    },
+    "/users/{userId}/sources/{sourceId}": {
+      "schema": "JobSource",
+      "description": "User's job sources"
+    },
+    "/users/{userId}/jobs/{jobId}": {
+      "schema": "JobListing",
+      "description": "User's job listings"
+    }
+  }
+}

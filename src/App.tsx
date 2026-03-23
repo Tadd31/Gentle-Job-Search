@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Component } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -27,14 +27,90 @@ import {
   Check,
   ChevronDown,
   Coins,
-  Zap
+  Zap,
+  LogOut,
+  LogIn,
+  User as UserIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
 import Papa from 'papaparse';
 import confetti from 'canvas-confetti';
+import { 
+  auth, 
+  db, 
+  signInWithGoogle, 
+  logout, 
+  onAuthStateChanged, 
+  User, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  Timestamp,
+  handleFirestoreError,
+  OperationType
+} from './firebase';
 
 const ZEN_SOUND = 'https://actions.google.com/sounds/v1/water/water_lapping_wind.ogg';
+
+// Error Boundary Component
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorInfo: string | null;
+}
+
+class ErrorBoundary extends Component<any, any> {
+  constructor(props: any) {
+    super(props);
+    (this as any).state = { hasError: false, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorInfo: error.message };
+  }
+
+  render() {
+    if ((this as any).state.hasError) {
+      let displayMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse((this as any).state.errorInfo || '{}');
+        if (parsed.error) displayMessage = `Permission Denied: ${parsed.operationType} on ${parsed.path}`;
+      } catch (e) {
+        displayMessage = (this as any).state.errorInfo || displayMessage;
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#FBF9F7] p-8">
+          <div className="pastel-card p-8 max-w-md text-center">
+            <AlertCircle size={48} className="text-red-400 mx-auto mb-4" />
+            <h2 className="text-2xl font-serif italic mb-4">Application Error</h2>
+            <p className="text-sm opacity-60 mb-6">{displayMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="btn-primary w-full"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (this as any).props.children;
+  }
+}
 
 interface Job {
   id: string;
@@ -42,7 +118,7 @@ interface Job {
   company: string;
   location: string;
   link: string;
-  found_at: string;
+  found_at: any; // Firestore Timestamp or ISO string
   description: string;
   status: 'new' | 'past' | 'approved' | 'rejected' | 'applied';
   source_url: string;
@@ -61,12 +137,12 @@ interface Profile {
 }
 
 interface Source {
-  id: number;
+  id: string;
   url: string;
   name: string;
   is_broken?: boolean;
   last_error?: string;
-  last_crawled?: string;
+  last_crawled?: any; // Firestore Timestamp or ISO string
   jobs_found?: number;
 }
 
@@ -81,6 +157,16 @@ interface LastCrawlReport {
 type Tab = 'new' | 'past' | 'approved' | 'applied' | 'rejected' | 'settings' | 'sources';
 
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('new');
   const [profile, setProfile] = useState<Profile>({
     keywords: '',
@@ -108,7 +194,7 @@ export default function App() {
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
   const [sourceEditModal, setSourceEditModal] = useState<{
     isOpen: boolean;
-    sourceId: number;
+    sourceId: string;
     name: string;
     url: string;
   } | null>(null);
@@ -121,6 +207,69 @@ export default function App() {
     onConfirm?: () => void;
   } | null>(null);
 
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Real-time Listeners
+  useEffect(() => {
+    if (!user || !isAuthReady) {
+      if (isAuthReady) {
+        setProfile({
+          keywords: '',
+          location: '',
+          linkedin_url: '',
+          search_mode: 'strict',
+          crawl_interval: 3
+        });
+        setSources([]);
+        setJobs([]);
+      }
+      return;
+    }
+
+    const userId = user.uid;
+
+    // Profile Listener
+    const profileRef = doc(db, 'users', userId, 'profile', 'config');
+    const unsubscribeProfile = onSnapshot(profileRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setProfile(docSnap.data() as Profile);
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/profile/config`));
+
+    // Sources Listener
+    const sourcesRef = collection(db, 'users', userId, 'sources');
+    const unsubscribeSources = onSnapshot(sourcesRef, (snapshot) => {
+      const sourcesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Source));
+      setSources(sourcesData);
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/sources`));
+
+    // Jobs Listener
+    const jobsRef = collection(db, 'users', userId, 'jobs');
+    let jobsQuery = query(jobsRef, orderBy('found_at', 'desc'));
+    
+    if (activeTab !== 'settings' && activeTab !== 'sources') {
+      jobsQuery = query(jobsRef, where('status', '==', activeTab), orderBy('found_at', 'desc'));
+    }
+
+    const unsubscribeJobs = onSnapshot(jobsQuery, (snapshot) => {
+      const jobsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+      setJobs(jobsData);
+    }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/jobs`));
+
+    return () => {
+      unsubscribeProfile();
+      unsubscribeSources();
+      unsubscribeJobs();
+    };
+  }, [user, isAuthReady, activeTab]);
+
   const showAlert = (title: string, message: string) => {
     setModal({ isOpen: true, type: 'alert', title, message });
   };
@@ -131,12 +280,6 @@ export default function App() {
 
   const zenAudioRef = useRef<HTMLAudioElement | null>(null);
   const sourceFileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    fetchProfile();
-    fetchSources();
-    fetchJobs();
-  }, [activeTab]);
 
   const [lastCrawlReport, setLastCrawlReport] = useState<LastCrawlReport | null>(null);
 
@@ -220,37 +363,35 @@ export default function App() {
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return showAlert('Login Required', 'Please log in to save your profile.');
     setIsSaving(true);
     try {
-      await fetchWithTimeout('/api/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile),
-      });
-      await fetchProfile();
+      const profileRef = doc(db, 'users', user.uid, 'profile', 'config');
+      await setDoc(profileRef, profile);
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/profile/config`);
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleResetData = () => {
+    if (!user) return;
     showConfirm(
       'Reset All Data',
-      'Are you sure you want to reset all job search data? This will clear all jobs but keep your profile and sources. This data is stored locally on the server in a database.',
+      'Are you sure you want to reset all job search data? This will clear all jobs but keep your profile and sources. This data is stored in your private Cloud Firestore.',
       async () => {
         setIsResetting(true);
         try {
-          console.log('Resetting jobs...');
-          const res = await fetchWithTimeout('/api/jobs/clear-all', { method: 'POST' });
-          if (!res.ok) throw new Error('Failed to reset data');
-          setJobs([]); // Clear immediately in UI
-          await fetchJobs();
+          const jobsRef = collection(db, 'users', user.uid, 'jobs');
+          const snapshot = await getDocs(jobsRef);
+          const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+          await Promise.all(deletePromises);
           showAlert('Success', 'Job data has been reset.');
         } catch (err) {
           console.error(err);
-          showAlert('Error', 'Failed to reset data.');
+          handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/jobs`);
         } finally {
           setIsResetting(false);
         }
@@ -259,21 +400,16 @@ export default function App() {
   };
 
   const handleUpdateJobLink = async (jobId: string) => {
-    if (!newJobLink) return;
+    if (!newJobLink || !user) return;
     try {
-      const res = await fetchWithTimeout(`/api/jobs/${jobId}/link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ link: newJobLink })
-      });
-      if (!res.ok) throw new Error('Failed to update link');
+      const jobRef = doc(db, 'users', user.uid, 'jobs', jobId);
+      await updateDoc(jobRef, { link: newJobLink });
       setEditingJobId(null);
       setNewJobLink('');
-      await fetchJobs();
       showAlert('Success', 'Job link updated.');
     } catch (err) {
       console.error(err);
-      showAlert('Error', 'Failed to update link.');
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${jobId}`);
     }
   };
 
@@ -356,18 +492,14 @@ export default function App() {
           const url = row[urlColIndex];
           const name = nameColIndex !== -1 ? row[nameColIndex] : url;
 
-          if (url && isUrl(url)) {
+          if (url && isUrl(url) && user) {
             // Check for duplicates
             const isDuplicate = sources.some(s => s.url.toLowerCase() === url.toLowerCase());
             if (isDuplicate) continue;
 
             try {
-              await fetchWithTimeout('/api/sources', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, name }),
-              });
-              await fetchSources();
+              const sourcesRef = collection(db, 'users', user.uid, 'sources');
+              await setDoc(doc(sourcesRef), { url, name, jobs_found: 0 });
             } catch (err) {
               console.error('Failed to import source:', url, err);
             }
@@ -387,44 +519,41 @@ export default function App() {
 
   const handleAddSource = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSourceUrl) return;
+    if (!newSourceUrl || !user) return showAlert('Login Required', 'Please log in to add sources.');
     setIsAddingSource(true);
     try {
-      await fetchWithTimeout('/api/sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: newSourceUrl, name: newSourceName }),
-      });
+      const sourcesRef = collection(db, 'users', user.uid, 'sources');
+      await setDoc(doc(sourcesRef), { url: newSourceUrl, name: newSourceName || newSourceUrl, jobs_found: 0 });
       setNewSourceUrl('');
       setNewSourceName('');
-      await fetchSources();
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sources`);
     } finally {
       setIsAddingSource(false);
     }
   };
 
-  const handleDeleteSource = async (id: number) => {
+  const handleDeleteSource = async (id: string) => {
+    if (!user) return;
     try {
-      await fetchWithTimeout(`/api/sources/${id}`, { method: 'DELETE' });
-      await fetchSources();
+      const sourceRef = doc(db, 'users', user.uid, 'sources', id);
+      await deleteDoc(sourceRef);
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/sources/${id}`);
     }
   };
 
-  const handleUpdateSource = async (id: number, url: string, name: string) => {
+  const handleUpdateSource = async (id: string, url: string, name: string) => {
+    if (!user) return;
     try {
-      await fetchWithTimeout(`/api/sources/${id}/update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, name })
-      });
+      const sourceRef = doc(db, 'users', user.uid, 'sources', id);
+      await updateDoc(sourceRef, { url, name });
       setSourceEditModal(null);
-      await fetchSources();
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/sources/${id}`);
     }
   };
 
@@ -443,36 +572,27 @@ export default function App() {
   };
 
   const handleClearSources = () => {
-    console.log('handleClearSources triggered');
+    if (!user) return;
     showConfirm(
       'Clear All Sources',
       'Are you sure you want to delete ALL crawl sources? This cannot be undone.',
       async () => {
-        const previousSources = [...sources];
-        setSources([]); // Clear immediately in UI
-        
         try {
-          console.log('Sending POST request to /api/sources/clear-all...');
-          const res = await fetchWithTimeout('/api/sources/clear-all', { method: 'POST' });
-          
-          if (!res.ok) {
-            throw new Error(`Failed to clear sources: ${res.statusText}`);
-          }
-          
-          console.log('Sources cleared on server, refreshing list...');
-          // Even though we already cleared UI, fetch to be sure and sync
-          await fetchSources();
+          const sourcesRef = collection(db, 'users', user.uid, 'sources');
+          const snapshot = await getDocs(sourcesRef);
+          const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+          await Promise.all(deletePromises);
           showAlert('Success', 'All sources have been removed.');
         } catch (err) {
           console.error('Error in handleClearSources:', err);
-          setSources(previousSources); // Rollback if failed
-          showAlert('Error', 'Failed to clear sources. Check console for details.');
+          handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/sources`);
         }
       }
     );
   };
 
   const handleUpdateJobStatus = async (id: string, status: Job['status']) => {
+    if (!user) return;
     try {
       if (status === 'applied') {
         confetti({
@@ -483,14 +603,11 @@ export default function App() {
         });
       }
 
-      await fetchWithTimeout(`/api/jobs/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
-      });
-      fetchJobs();
+      const jobRef = doc(db, 'users', user.uid, 'jobs', id);
+      await updateDoc(jobRef, { status });
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${id}`);
     }
   };
 
@@ -539,7 +656,7 @@ export default function App() {
   }, [jobs, selectedIndex, modal, isCrawling]);
 
   const handleManualCrawl = async () => {
-    if (isCrawling) return;
+    if (isCrawling || !user) return;
     setIsCrawling(true);
     setCrawlProgress('Initializing session...');
     let totalNewJobs = 0;
@@ -556,15 +673,8 @@ export default function App() {
         throw new Error('GEMINI_API_KEY is not defined. Please check your environment settings.');
       }
 
-      // Fetch ALL jobs for deduplication
-      const allJobsRes = await fetchWithTimeout('/api/jobs?status=all');
-      const allJobs: Job[] = allJobsRes.ok ? await allJobsRes.json() : [];
-      const existingUrls = new Set(allJobs.map(j => j.link));
-
-      // Start session and move old 'new' jobs to 'past'
-      const sessionRes = await fetchWithTimeout('/api/start-crawl-session', { method: 'POST' });
-      if (!sessionRes.ok) throw new Error(`Failed to start session: ${sessionRes.statusText}`);
-      const { sessionId } = await sessionRes.json();
+      // Deduplication: Fetch existing job URLs from state (synced with Firestore)
+      const existingUrls = new Set(jobs.map(j => j.link));
 
       const ai = new GoogleGenAI({ apiKey });
       
@@ -600,7 +710,7 @@ export default function App() {
       for (const source of sortedSources) {
         // Incremental Crawling Check: Skip if crawled in last X days
         if (source.last_crawled) {
-          const lastCrawledDate = new Date(source.last_crawled);
+          const lastCrawledDate = source.last_crawled instanceof Timestamp ? source.last_crawled.toDate() : new Date(source.last_crawled);
           const now = new Date();
           const diffDays = (now.getTime() - lastCrawledDate.getTime()) / (1000 * 3600 * 24);
           const interval = profile.crawl_interval || 3;
@@ -623,11 +733,8 @@ export default function App() {
           } catch (e) {}
 
           sourcesUnreachable.push(source.name || source.url);
-          await fetchWithTimeout(`/api/sources/${source.id}/status`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ is_broken: true, last_error: errorDetail || 'Fetch failed' })
-          });
+          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+          await updateDoc(sourceRef, { is_broken: true, last_error: errorDetail || 'Fetch failed' });
           continue;
         }
         
@@ -635,20 +742,14 @@ export default function App() {
 
         if (!text || text.length < 200) {
           sourcesUnreachable.push(source.name || source.url);
-          await fetchWithTimeout(`/api/sources/${source.id}/status`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ is_broken: true, last_error: 'Page returned very little content' })
-          });
+          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+          await updateDoc(sourceRef, { is_broken: true, last_error: 'Page returned very little content' });
           continue;
         }
 
         if (source.is_broken) {
-          await fetchWithTimeout(`/api/sources/${source.id}/status`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ is_broken: false, last_error: null })
-          });
+          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+          await updateDoc(sourceRef, { is_broken: false, last_error: null });
         }
 
         setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
@@ -696,7 +797,7 @@ export default function App() {
         `;
 
         const result = await generateWithRetry(prompt);
-        let extractedJobs: Job[] = JSON.parse(result.text || '[]');
+        let extractedJobs: any[] = JSON.parse(result.text || '[]');
         
         // Deduplication by URL
         const newJobs = extractedJobs.filter(job => !existingUrls.has(job.link));
@@ -704,23 +805,27 @@ export default function App() {
         if (newJobs.length > 0) {
           totalNewJobs += newJobs.length;
           setCrawlProgress(`Saving ${newJobs.length} new jobs from ${source.name || source.url}...`);
-          await fetchWithTimeout('/api/save-jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobs: newJobs, source_url: source.url, sessionId }),
+          
+          const jobsRef = collection(db, 'users', user.uid, 'jobs');
+          const savePromises = newJobs.map(job => {
+            const jobDoc = doc(jobsRef);
+            return setDoc(jobDoc, {
+              ...job,
+              status: 'new',
+              source_url: source.url,
+              found_at: Timestamp.now()
+            });
           });
+          await Promise.all(savePromises);
         } else {
           sourcesWithNoMatches++;
         }
 
         // Update Source Stats
-        await fetchWithTimeout(`/api/sources/${source.id}/crawl-stats`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            last_crawled: new Date().toISOString(), 
-            jobs_found_increment: newJobs.length 
-          })
+        const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+        await updateDoc(sourceRef, { 
+          last_crawled: Timestamp.now(), 
+          jobs_found: (source.jobs_found || 0) + newJobs.length 
         });
       }
       
@@ -734,8 +839,6 @@ export default function App() {
 
       setCrawlProgress('Crawl complete!');
       setActiveTab('new');
-      await fetchJobs();
-      await fetchSources();
     } catch (err: any) {
       console.error(err);
       setCrawlProgress(`Error: ${err.message}`);
@@ -870,10 +973,40 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-6">
+              {user ? (
+                <div className="flex items-center gap-4">
+                  <div className="flex flex-col items-end">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-[#2D3A29]">
+                      {user.displayName || 'User'}
+                    </span>
+                    <button 
+                      onClick={logout}
+                      className="text-[9px] font-bold uppercase tracking-widest text-red-400 hover:text-red-500 transition-colors flex items-center gap-1"
+                    >
+                      <LogOut size={10} /> Logout
+                    </button>
+                  </div>
+                  {user.photoURL ? (
+                    <img src={user.photoURL} className="w-8 h-8 rounded-full border border-[#E8E4DE]" alt="" />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-[#F7F3EF] flex items-center justify-center border border-[#E8E4DE]">
+                      <UserIcon size={16} className="opacity-20" />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button 
+                  onClick={signInWithGoogle}
+                  className="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all"
+                >
+                  <LogIn size={14} />
+                  <span>Login</span>
+                </button>
+              )}
               <button 
                 onClick={handleResetData}
-                disabled={isResetting}
-                className="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-red-400/60 hover:text-red-500 transition-all hover:scale-105"
+                disabled={isResetting || !user}
+                className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-red-400/60 hover:text-red-500 transition-all hover:scale-105 ${!user ? 'opacity-20 cursor-not-allowed' : ''}`}
                 title="Reset All Job Data"
               >
                 <Trash2 size={14} />
@@ -881,8 +1014,8 @@ export default function App() {
               </button>
               <button 
                 onClick={handleManualCrawl}
-                disabled={isCrawling}
-                className={`btn-primary flex items-center gap-3 px-8 ${isCrawling ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={isCrawling || !user}
+                className={`btn-primary flex items-center gap-3 px-8 ${isCrawling || !user ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {isCrawling ? (
                   <>
@@ -1247,7 +1380,7 @@ export default function App() {
                         {(() => {
                           const latest = sources.reduce((acc, s) => {
                             if (!s.last_crawled) return acc;
-                            const d = new Date(s.last_crawled);
+                            const d = s.last_crawled instanceof Timestamp ? s.last_crawled.toDate() : new Date(s.last_crawled);
                             return !acc || d > acc ? d : acc;
                           }, null as Date | null);
                           return latest ? latest.toLocaleDateString() : 'Never';
@@ -1468,6 +1601,10 @@ export default function App() {
                                   <span className="flex items-center gap-1.5"><Home size={14} className="text-[#93C5FD]" /> {job.company}</span>
                                   <span className="flex items-center gap-1.5"><MapPin size={14} className="text-[#93C5FD]" /> {job.location}</span>
                                   <span className="flex items-center gap-1.5"><Coins size={14} className="text-[#93C5FD]" /> {job.salary || 'Unknown'}</span>
+                                  <span className="flex items-center gap-1.5 opacity-40">
+                                    <History size={12} /> 
+                                    {job.found_at instanceof Timestamp ? job.found_at.toDate().toLocaleDateString() : new Date(job.found_at).toLocaleDateString()}
+                                  </span>
                                 </div>
                               </div>
                             </div>
