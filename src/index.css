@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,700;1,700&family=Outfit:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Playfair Display", serif;
+}
+
+body {
+  @apply bg-[#FDFBF7] text-[#4A443F] font-sans;
+}
+
+.pastel-card {
+  @apply bg-white/60 backdrop-blur-sm border border-[#E8E4DE] rounded-2xl shadow-sm transition-all duration-300;
+}
+
+.pastel-card:hover {
+  @apply border-[#D8D4CE] shadow-md;
+}
+
+.data-row {
+  @apply border-b border-[#E8E4DE] transition-all duration-300;
+}
+
+.data-row:hover {
+  @apply bg-[#F7F3EF];
+}
+
+.btn-primary {
+  @apply bg-[#93C5FD] text-[#2D3A29] px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#60A5FA] transition-all shadow-sm active:scale-95;
+}
+
+.btn-secondary {
+  @apply bg-[#E8E4DE] text-[#4A443F] px-6 py-2.5 rounded-full text-sm font-medium hover:bg-[#D8D4CE] transition-all active:scale-95;
+}
+
+.input-field {
+  @apply w-full bg-white/80 border border-[#E8E4DE] rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:border-[#93C5FD] focus:ring-2 focus:ring-[#93C5FD]/20 transition-all;
+}
+
+.tab-active {
+  @apply border-b-2 border-[#93C5FD] text-[#2D3A29] font-semibold;
+}
+
+.tab-inactive {
+  @apply text-[#4A443F]/60 hover:text-[#4A443F] transition-colors;
+}
