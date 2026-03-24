@@ -1,5 +1,5 @@
 {
-  "name": "Let's go to work",
+  "name": "Job Scout",
   "description": "Automated job crawler that tracks opportunities from your favorite websites twice daily.",
   "requestFramePermissions": []
 }

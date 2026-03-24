@@ -22,35 +22,70 @@ async function startServer() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
+    const commonHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"macOS"',
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-site': 'none',
+      'sec-fetch-user': '?1',
+      'upgrade-insecure-requests': '1',
+    };
+
     try {
       let urlStr = url as string;
       let response = await fetch(urlStr, {
         signal: controller.signal,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
+          ...commonHeaders,
           'Referer': new URL(urlStr).origin,
         }
       });
 
-      // Smart Retry for 404: Try adding or removing a trailing slash
+      // Smart Retry for 404: Try common career paths
       if (response.status === 404) {
-        const alternativeUrl = urlStr.endsWith('/') ? urlStr.slice(0, -1) : `${urlStr}/`;
-        console.log(`404 detected for ${urlStr}. Trying alternative: ${alternativeUrl}`);
-        const altResponse = await fetch(alternativeUrl, {
+        const alternatives = [
+          urlStr.endsWith('/') ? urlStr.slice(0, -1) : `${urlStr}/`,
+          urlStr.replace(/\/careers\/?$/, '/jobs'),
+          urlStr.replace(/\/careers\/?$/, '/work-with-us'),
+          urlStr.replace(/\/careers\/?$/, '/vacancies'),
+        ];
+
+        for (const altUrl of alternatives) {
+          if (altUrl === urlStr) continue;
+          console.log(`404 detected for ${urlStr}. Trying alternative: ${altUrl}`);
+          try {
+            const altResponse = await fetch(altUrl, {
+              signal: controller.signal,
+              headers: { ...commonHeaders, 'Referer': new URL(altUrl).origin }
+            });
+            if (altResponse.ok) {
+              response = altResponse;
+              urlStr = altUrl;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Handle 403: Try without some headers or with different ones
+      if (response.status === 403) {
+        console.log(`403 detected for ${urlStr}. Retrying with simplified headers...`);
+        const retryResponse = await fetch(urlStr, {
           signal: controller.signal,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Referer': new URL(alternativeUrl).origin,
+            'Accept': '*/*',
           }
         });
-        if (altResponse.ok) {
-          response = altResponse;
-          urlStr = alternativeUrl;
+        if (retryResponse.ok) {
+          response = retryResponse;
         }
       }
 
