@@ -21,13 +21,16 @@ import {
   Settings2,
   Trash2,
   Download,
+  Upload,
   Waves,
   AlertCircle,
+  Info,
   X,
   Check,
   ChevronDown,
   Coins,
   Zap,
+  HelpCircle,
   LogOut,
   LogIn,
   User as UserIcon
@@ -56,6 +59,7 @@ import {
   orderBy, 
   limit, 
   Timestamp,
+  writeBatch,
   handleFirestoreError,
   OperationType
 } from './firebase';
@@ -133,7 +137,6 @@ interface Profile {
   linkedin_url: string;
   min_salary?: number;
   search_mode: 'strict' | 'discovery';
-  crawl_interval?: number;
 }
 
 interface Source {
@@ -172,8 +175,7 @@ function AppContent() {
     keywords: '',
     location: '',
     linkedin_url: '',
-    search_mode: 'strict',
-    crawl_interval: 3
+    search_mode: 'strict'
   });
   const [sources, setSources] = useState<Source[]>([]);
   const [newSourceUrl, setNewSourceUrl] = useState('');
@@ -187,9 +189,11 @@ function AppContent() {
   const [isSaving, setIsSaving] = useState(false);
   const [isAddingSource, setIsAddingSource] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [debugModal, setDebugModal] = useState<{ isOpen: boolean; text: string; sourceName: string } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importStatus, setImportStatus] = useState('');
   const [sourceSort, setSourceSort] = useState<'latest' | 'alpha'>('latest');
+  const [jobSort, setJobSort] = useState<'latest' | 'alpha'>('latest');
   const [isZenMode, setIsZenMode] = useState(false);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
   const [sourceEditModal, setSourceEditModal] = useState<{
@@ -224,8 +228,7 @@ function AppContent() {
           keywords: '',
           location: '',
           linkedin_url: '',
-          search_mode: 'strict',
-          crawl_interval: 3
+          search_mode: 'strict'
         });
         setSources([]);
         setJobs([]);
@@ -380,7 +383,7 @@ function AppContent() {
     if (!user) return;
     showConfirm(
       'Reset All Data',
-      'Are you sure you want to reset all job search data? This will clear all jobs but keep your profile and sources. This data is stored in your private Cloud Firestore.',
+      'Are you sure you want to reset all job search data? This will permanently delete all discovered jobs from your database, but keep your profile and sources. This action cannot be undone.',
       async () => {
         setIsResetting(true);
         try {
@@ -397,6 +400,43 @@ function AppContent() {
         }
       }
     );
+  };
+
+  const handleTestSource = async (source: Source) => {
+    if (!user) return;
+    setCrawlProgress(`Testing ${source.name || source.url}...`);
+    try {
+      const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
+      let text = '';
+      let error = '';
+      
+      if (!contentRes.ok) {
+        try {
+          const errJson = await contentRes.json();
+          error = errJson.error || contentRes.statusText;
+        } catch (e) {
+          error = contentRes.statusText;
+        }
+      } else {
+        const data = await contentRes.json();
+        text = data.text;
+      }
+
+      setDebugModal({
+        isOpen: true,
+        text: text || `ERROR: ${error || 'No text content found on this page.'}`,
+        sourceName: source.name || source.url
+      });
+    } catch (err: any) {
+      console.error(err);
+      setDebugModal({
+        isOpen: true,
+        text: `CRITICAL ERROR: ${err.message}`,
+        sourceName: source.name || source.url
+      });
+    } finally {
+      setCrawlProgress('');
+    }
   };
 
   const handleUpdateJobLink = async (jobId: string) => {
@@ -655,6 +695,57 @@ function AppContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [jobs, selectedIndex, modal, isCrawling]);
 
+  const fetchGreenhouseJobs = async (boardId: string) => {
+    if (!user) return;
+    setIsCrawling(true);
+    setCrawlProgress(`Fetching Greenhouse jobs for ${boardId}...`);
+    try {
+      const res = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || `Failed to fetch Greenhouse jobs: ${res.statusText}`);
+      }
+      const data = await res.json();
+      
+      if (data.jobs && Array.isArray(data.jobs)) {
+        const existingUrls = new Set(jobs.map(j => j.link));
+        const newJobs = data.jobs.filter((j: any) => !existingUrls.has(j.absolute_url));
+        
+        if (newJobs.length > 0) {
+          const jobsRef = collection(db, 'users', user.uid, 'jobs');
+          const savePromises = newJobs.map((j: any) => {
+            const jobDoc = doc(jobsRef);
+            // Extract some metadata if available
+            const brand = j.metadata?.find((m: any) => m.name === 'Brand')?.value;
+            const capability = j.metadata?.find((m: any) => m.name === 'Capability')?.value;
+            
+            return setDoc(jobDoc, {
+              id: `gh-${j.id}`,
+              title: j.title,
+              company: j.company_name || (brand ? `${boardId} (${brand})` : boardId),
+              location: j.location?.name || 'Unknown',
+              link: j.absolute_url,
+              description: `${capability ? `Capability: ${capability}. ` : ''}Found via Greenhouse API for board: ${boardId}`,
+              status: 'new',
+              source_url: `https://boards.greenhouse.io/${boardId}`,
+              found_at: Timestamp.now()
+            });
+          });
+          await Promise.all(savePromises);
+          showAlert('Success', `Found and saved ${newJobs.length} new jobs from ${boardId} Greenhouse board.`);
+        } else {
+          showAlert('No New Jobs', `No new jobs found on the ${boardId} Greenhouse board.`);
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      showAlert('Error', err.message);
+    } finally {
+      setIsCrawling(false);
+      setCrawlProgress('');
+    }
+  };
+
   const handleManualCrawl = async () => {
     if (isCrawling || !user) return;
     setIsCrawling(true);
@@ -673,8 +764,23 @@ function AppContent() {
         throw new Error('GEMINI_API_KEY is not defined. Please check your environment settings.');
       }
 
-      // Deduplication: Fetch existing job URLs from state (synced with Firestore)
-      const existingUrls = new Set(jobs.map(j => j.link));
+      // Move existing 'new' jobs to 'past'
+      const jobsRef = collection(db, 'users', user.uid, 'jobs');
+      const newJobsQuery = query(jobsRef, where('status', '==', 'new'));
+      const newJobsSnapshot = await getDocs(newJobsQuery);
+      
+      if (!newJobsSnapshot.empty) {
+        setCrawlProgress('Archiving previous results...');
+        const batch = writeBatch(db);
+        newJobsSnapshot.docs.forEach(jobDoc => {
+          batch.update(jobDoc.ref, { status: 'past' });
+        });
+        await batch.commit();
+      }
+
+      // Deduplication: Fetch existing job URLs from Firestore
+      const allJobsSnapshot = await getDocs(jobsRef);
+      const existingUrls = new Set(allJobsSnapshot.docs.map(d => d.data().link));
 
       const ai = new GoogleGenAI({ apiKey });
       
@@ -708,125 +814,175 @@ function AppContent() {
       );
       
       for (const source of sortedSources) {
-        // Incremental Crawling Check: Skip if crawled in last X days
-        if (source.last_crawled) {
-          const lastCrawledDate = source.last_crawled instanceof Timestamp ? source.last_crawled.toDate() : new Date(source.last_crawled);
-          const now = new Date();
-          const diffDays = (now.getTime() - lastCrawledDate.getTime()) / (1000 * 3600 * 24);
-          const interval = profile.crawl_interval || 3;
-          if (diffDays < interval) {
-            console.log(`Skipping ${source.name || source.url} - crawled ${Math.floor(diffDays)} days ago.`);
-            sourcesSkipped++;
-            continue;
+        try {
+          // Incremental Crawling Check: Skip if crawled in last X days
+          if (source.last_crawled) {
+            // Crawl interval removed by user request
           }
-        }
 
-        sourcesChecked++;
-        setCrawlProgress(`Fetching content from ${source.name || source.url}...`);
-        const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
-        
-        if (!contentRes.ok) {
-          let errorDetail = contentRes.statusText;
-          try {
-            const errJson = await contentRes.json();
-            if (errJson.error) errorDetail = errJson.error;
-          } catch (e) {}
+          sourcesChecked++;
+          let extractedJobs: any[] = [];
+          let text = '';
 
-          sourcesUnreachable.push(source.name || source.url);
-          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-          await updateDoc(sourceRef, { is_broken: true, last_error: errorDetail || 'Fetch failed' });
-          continue;
-        }
-        
-        const { text } = await contentRes.json();
+          // SMART CHECK: Is this a Greenhouse Board?
+          const ghMatch = source.url.match(/boards\.greenhouse\.io\/([^/?#]+)/);
+          if (ghMatch) {
+            const boardId = ghMatch[1];
+            setCrawlProgress(`Fetching Greenhouse API for ${boardId}...`);
+            try {
+              const ghRes = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
+              if (ghRes.ok) {
+                const ghData = await ghRes.json();
+                if (ghData.jobs && Array.isArray(ghData.jobs)) {
+                  extractedJobs = ghData.jobs.map((j: any) => {
+                    const brand = j.metadata?.find((m: any) => m.name === 'Brand')?.value;
+                    const capability = j.metadata?.find((m: any) => m.name === 'Capability')?.value;
+                    return {
+                      id: `gh-${j.id}`,
+                      title: j.title,
+                      company: j.company_name || (brand ? `${source.name} (${brand})` : source.name),
+                      location: j.location?.name || 'Unknown',
+                      link: j.absolute_url,
+                      description: `${capability ? `Capability: ${capability}. ` : ''}Found via Greenhouse API.`,
+                      salary: 'Unknown',
+                      seniority: 'Unknown'
+                    };
+                  });
+                }
+              }
+            } catch (e) {
+              console.error(`Greenhouse API fallback failed for ${boardId}`, e);
+            }
+          }
 
-        if (!text || text.length < 200) {
-          sourcesUnreachable.push(source.name || source.url);
-          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-          await updateDoc(sourceRef, { is_broken: true, last_error: 'Page returned very little content' });
-          continue;
-        }
+          if (extractedJobs.length === 0) {
+            setCrawlProgress(`Fetching content from ${source.name || source.url}...`);
+            const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
+            
+            if (!contentRes.ok) {
+              let errorDetail = contentRes.statusText;
+              try {
+                const errJson = await contentRes.json();
+                if (errJson.error) errorDetail = errJson.error;
+                if (errorDetail.includes('Sync VML')) {
+                  showAlert('VML Access Denied', 'VML is blocking direct access. Please use the "Sync VML" button in the header to fetch jobs directly from their Greenhouse boards.');
+                }
+              } catch (e) {}
 
-        if (source.is_broken) {
-          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-          await updateDoc(sourceRef, { is_broken: false, last_error: null });
-        }
+              sourcesUnreachable.push(source.name || source.url);
+              const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+              await updateDoc(sourceRef, { is_broken: true, last_error: errorDetail || 'Fetch failed' });
+              continue;
+            }
+            
+            const data = await contentRes.json();
+            text = data.text;
 
-        setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
-        
-        const modeInstructions = profile.search_mode === 'strict' 
-          ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
-          : `DISCOVERY MODE: Use keywords (${profile.keywords}) AND the user's LinkedIn profile (${profile.linkedin_url}) to semantically discover relevant roles.`;
+            if (!text || text.length < 200) {
+              sourcesUnreachable.push(source.name || source.url);
+              // Only mark as broken if contentRes.ok was false (handled above)
+              // For low content, we just skip this source for now
+              continue;
+            }
 
-        const prompt = `
-          Extract job listings from the following text. 
+            if (source.is_broken) {
+              const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+              await updateDoc(sourceRef, { is_broken: false, last_error: null });
+            }
+
+            setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
+            
+            const modeInstructions = profile.search_mode === 'strict' 
+              ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
+              : `DISCOVERY MODE: Use keywords (${profile.keywords}) AND the user's LinkedIn profile (${profile.linkedin_url}) to semantically discover relevant roles.`;
+
+            const approvedContext = jobs.filter(j => j.status === 'approved').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
+            const rejectedContext = jobs.filter(j => j.status === 'rejected').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
+
+            const prompt = `
+              Extract job listings from the following text. 
+              
+              USER CONTEXT:
+              - Keywords: ${profile.keywords}
+              - Location: ${profile.location}
+              - Minimum Salary: £${profile.min_salary?.toLocaleString() || '30,000'}
+              
+              LEARNING FROM HISTORY:
+              The user has APPROVED these types of jobs:
+              ${approvedContext || 'None yet'}
+              
+              The user has REJECTED these types of jobs:
+              ${rejectedContext || 'None yet'}
+              
+              SEARCH MODE:
+              ${modeInstructions}
+              
+              CRITICAL FILTERING CRITERIA:
+              1. Be thorough but precise. 
+              2. Use "OR" logic for keywords.
+              3. LOCATION PRECISION: The user is looking for jobs in ${profile.location}. Be flexible with sub-regions (e.g., if they want "London", "Central London" is fine).
+              4. SALARY EXTRACTION: Look for salary information.
+              5. SENIORITY EXTRACTION: Look for seniority level.
+
+              LINK EXTRACTION RULES:
+              - Find the MOST DIRECT link to the specific job description page.
+              - If the link is relative, make it absolute using the source URL: ${source.url}
+
+              Text to analyze:
+              ${text}
+
+              Return a JSON array of objects with these fields:
+              - id (a unique string based on title and company)
+              - title
+              - company
+              - location
+              - link (absolute URL)
+              - description (short summary)
+              - salary (e.g., "£40,000 - £50,000" or "Unknown")
+              - seniority (e.g., "Senior")
+
+              If no jobs match the criteria, return an empty array [].
+            `;
+
+            const result = await generateWithRetry(prompt);
+            extractedJobs = JSON.parse(result.text || '[]');
+          }
           
-          USER CONTEXT:
-          - Keywords: ${profile.keywords}
-          - Location: ${profile.location}
-          - Minimum Salary: £${profile.min_salary?.toLocaleString() || '30,000'}
+          // Deduplication by URL
+          const newJobs = extractedJobs.filter(job => !existingUrls.has(job.link));
           
-          SEARCH MODE:
-          ${modeInstructions}
-          
-          CRITICAL FILTERING CRITERIA:
-          1. Be thorough but precise. 
-          2. Use "OR" logic for keywords.
-          3. LOCATION PRECISION (STRICT): The user is looking for jobs in ${profile.location}. 
-          4. SALARY EXTRACTION: Look for salary information.
-          5. SENIORITY EXTRACTION: Look for seniority level.
-
-          LINK EXTRACTION RULES:
-          - Find the MOST DIRECT link to the specific job description page.
-          - If the link is relative, make it absolute using the source URL: ${source.url}
-
-          Text to analyze:
-          ${text}
-
-          Return a JSON array of objects with these fields:
-          - id (a unique string based on title and company)
-          - title
-          - company
-          - location
-          - link (absolute URL)
-          - description (short summary)
-          - salary (e.g., "£40,000 - £50,000" or "Unknown")
-          - seniority (e.g., "Senior")
-
-          If no jobs match the criteria, return an empty array [].
-        `;
-
-        const result = await generateWithRetry(prompt);
-        let extractedJobs: any[] = JSON.parse(result.text || '[]');
-        
-        // Deduplication by URL
-        const newJobs = extractedJobs.filter(job => !existingUrls.has(job.link));
-        
-        if (newJobs.length > 0) {
-          totalNewJobs += newJobs.length;
-          setCrawlProgress(`Saving ${newJobs.length} new jobs from ${source.name || source.url}...`);
-          
-          const jobsRef = collection(db, 'users', user.uid, 'jobs');
-          const savePromises = newJobs.map(job => {
-            const jobDoc = doc(jobsRef);
-            return setDoc(jobDoc, {
-              ...job,
-              status: 'new',
-              source_url: source.url,
-              found_at: Timestamp.now()
+          if (newJobs.length > 0) {
+            totalNewJobs += newJobs.length;
+            setCrawlProgress(`Saving ${newJobs.length} new jobs from ${source.name || source.url}...`);
+            
+            const jobsRef = collection(db, 'users', user.uid, 'jobs');
+            const savePromises = newJobs.map(job => {
+              const jobDoc = doc(jobsRef);
+              existingUrls.add(job.link); // Prevent duplicates in the same crawl
+              return setDoc(jobDoc, {
+                ...job,
+                status: 'new',
+                source_url: source.url,
+                found_at: Timestamp.now()
+              });
             });
-          });
-          await Promise.all(savePromises);
-        } else {
-          sourcesWithNoMatches++;
-        }
+            await Promise.all(savePromises);
+          } else {
+            sourcesWithNoMatches++;
+          }
 
-        // Update Source Stats
-        const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-        await updateDoc(sourceRef, { 
-          last_crawled: Timestamp.now(), 
-          jobs_found: (source.jobs_found || 0) + newJobs.length 
-        });
+          // Update Source Stats
+          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+          await updateDoc(sourceRef, { 
+            last_crawled: Timestamp.now(), 
+            jobs_found: (source.jobs_found || 0) + newJobs.length 
+          });
+        } catch (sourceErr: any) {
+          console.error(`Error crawling ${source.name || source.url}:`, sourceErr);
+          sourcesUnreachable.push(source.name || source.url);
+          const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+          await updateDoc(sourceRef, { is_broken: true, last_error: sourceErr.message || 'Crawl failed' });
+        }
       }
       
       setLastCrawlReport({
@@ -1164,23 +1320,6 @@ function AppContent() {
                         <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 opacity-20 pointer-events-none" size={16} />
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="font-sans text-[11px] uppercase tracking-widest font-bold opacity-40">Crawl Interval (Days)</label>
-                      <div className="relative">
-                        <History className="absolute left-4 top-1/2 -translate-y-1/2 opacity-20" size={18} />
-                        <input 
-                          type="number" 
-                          min="1"
-                          max="30"
-                          className="input-field pl-12"
-                          value={profile.crawl_interval || 3}
-                          onChange={(e) => setProfile({ ...profile, crawl_interval: parseInt(e.target.value) || 1 })}
-                        />
-                      </div>
-                      <p className="text-[10px] opacity-40 mt-1 italic">
-                        Wait at least this many days before re-checking a source.
-                      </p>
-                    </div>
                     <button type="submit" disabled={isSaving} className="btn-primary w-full">
                       {isSaving ? 'Saving...' : 'Save Profile'}
                     </button>
@@ -1206,7 +1345,7 @@ function AppContent() {
                         </>
                       ) : (
                         <>
-                          <FileText size={14} />
+                          <Upload size={14} />
                           <span>{importStatus || 'Bulk Upload (CSV)'}</span>
                         </>
                       )}
@@ -1219,6 +1358,11 @@ function AppContent() {
                       />
                     </button>
                   </div>
+
+                  <div className="mb-4">
+                    <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30">Manual Entry</h3>
+                  </div>
+
                   <form onSubmit={handleAddSource} className="space-y-4">
                     <input 
                       type="text" 
@@ -1257,17 +1401,6 @@ function AppContent() {
                                       <span className="text-[8px] font-bold uppercase tracking-widest bg-red-500 text-white px-1.5 py-0.5 rounded flex items-center gap-1">
                                         <AlertCircle size={8} /> Broken
                                       </span>
-                                      <button 
-                                        onClick={() => setSourceEditModal({
-                                          isOpen: true,
-                                          sourceId: source.id,
-                                          name: source.name,
-                                          url: source.url
-                                        })}
-                                        className="text-[8px] font-bold uppercase tracking-widest text-[#93C5FD] hover:underline"
-                                      >
-                                        Fix
-                                      </button>
                                     </div>
                                   )}
                                 </div>
@@ -1351,6 +1484,74 @@ function AppContent() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+                  {/* Quick Add Greenhouse */}
+                  <div className="p-6 bg-green-50 rounded-3xl border border-green-100">
+                    <h3 className="text-sm font-bold text-green-800 mb-2 flex items-center gap-2">
+                      <Globe className="w-4 h-4" />
+                      Quick Add Greenhouse Board
+                    </h3>
+                    <p className="text-xs text-green-700 mb-4 leading-relaxed">
+                      Enter a Greenhouse Board ID to fetch jobs directly via API. This is the most reliable way to scout for jobs.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Board ID (e.g. wpp)"
+                        className="flex-1 p-3 text-sm border border-green-200 rounded-xl focus:ring-2 focus:ring-green-500 outline-none bg-white"
+                        id="gh-board-id-sources"
+                      />
+                      <button
+                        onClick={() => {
+                          const input = document.getElementById('gh-board-id-sources') as HTMLInputElement;
+                          if (input && input.value) {
+                            const boardId = input.value.trim();
+                            handleAddSource({
+                              preventDefault: () => {},
+                              target: {
+                                name: { value: `Greenhouse: ${boardId}` },
+                                url: { value: `https://boards.greenhouse.io/${boardId}` }
+                              }
+                            } as any);
+                            input.value = '';
+                          }
+                        }}
+                        className="px-6 py-3 bg-green-600 text-white text-xs font-bold rounded-xl hover:bg-green-700 transition-colors shadow-lg shadow-green-600/20"
+                      >
+                        Add Board
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* How-To Section */}
+                  <div className="p-6 bg-[#93C5FD]/5 border border-[#93C5FD]/20 rounded-3xl">
+                    <h3 className="text-sm font-bold text-[#2D3A29] mb-2 flex items-center gap-2">
+                      <HelpCircle className="w-4 h-4 text-[#93C5FD]" />
+                      How to find a Board ID?
+                    </h3>
+                    <p className="text-xs text-[#4A443F]/60 leading-relaxed">
+                      1. Go to the company's career page.<br/>
+                      2. Look for a URL like <code className="bg-[#93C5FD]/10 px-1 rounded">boards.greenhouse.io/companyname</code>.<br/>
+                      3. The <code className="bg-[#93C5FD]/10 px-1 rounded">companyname</code> part is your Board ID.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Crawler Tip */}
+                <div className="mb-8 p-6 bg-[#93C5FD]/5 border border-[#93C5FD]/20 rounded-3xl flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-2xl bg-[#93C5FD]/10 flex items-center justify-center text-[#93C5FD] shrink-0">
+                    <Info size={20} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-[#2D3A29] text-sm mb-1">Crawler Tip: Handling "Access Denied" (403)</h4>
+                    <p className="text-xs text-[#4A443F]/60 leading-relaxed">
+                      If you see "Access Denied" or "403", it means the website's bot protection is blocking the scout. 
+                      <strong>Solution:</strong> Try finding the direct job board URL (e.g. on Greenhouse or Workday). 
+                      You can also use the <strong>"Quick Add"</strong> tool above for Greenhouse boards.
+                    </p>
+                  </div>
+                </div>
+
                 {/* Source Health Dashboard */}
                 <div className="grid grid-cols-1 gap-6 mb-12">
                   <div className="pastel-card p-4 flex items-center justify-around">
@@ -1407,8 +1608,8 @@ function AppContent() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {[...sources].sort((a, b) => {
-                    if (sourceSort === 'alpha') return a.name.localeCompare(b.name);
-                    return b.id - a.id;
+                    if (sourceSort === 'alpha') return (a.name || '').localeCompare(b.name || '');
+                    return (b.last_crawled?.seconds || 0) - (a.last_crawled?.seconds || 0);
                   }).map(source => (
                     <div key={source.id} className={`pastel-card p-6 flex justify-between items-start group hover:shadow-md transition-all ${source.is_broken ? 'border-red-200 bg-red-50/30' : ''}`}>
                       <div className="flex items-start gap-4 overflow-hidden">
@@ -1418,13 +1619,27 @@ function AppContent() {
                         <div className="overflow-hidden">
                           <div className="flex items-center gap-2">
                             <p className="text-lg font-bold text-[#2D3A29] truncate">{source.name}</p>
+                            {source.url.includes('boards.greenhouse.io') && (
+                              <span className="text-[8px] font-bold uppercase tracking-widest bg-green-500 text-white px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+                                <Globe size={8} /> API
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs font-mono opacity-40 truncate mt-1">{source.url}</p>
+                          
+                          <div className="mt-2 flex items-center gap-3">
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
+                              Last: {source.last_crawled ? (source.last_crawled instanceof Timestamp ? source.last_crawled.toDate() : new Date(source.last_crawled)).toLocaleDateString() : 'Never'}
+                            </p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
+                              Jobs: {source.jobs_found || 0}
+                            </p>
+                          </div>
                           
                           {!!source.is_broken && (
                             <div className="mt-3 flex items-center gap-2 text-red-500">
                               <AlertCircle size={14} />
-                              <p className="text-[10px] font-medium italic truncate">
+                              <p className="text-[10px] font-medium italic leading-tight">
                                 {source.last_error || 'Connection failed'}
                               </p>
                             </div>
@@ -1440,6 +1655,13 @@ function AppContent() {
                         >
                           <ArrowUpRight size={18} />
                         </a>
+                        <button 
+                          onClick={() => handleTestSource(source)}
+                          className="text-[#4A443F]/40 hover:text-[#93C5FD] transition-all p-2 hover:bg-[#93C5FD]/10 rounded-lg"
+                          title="Test Crawler"
+                        >
+                          <Zap size={18} />
+                        </button>
                         <button 
                           onClick={() => setSourceEditModal({
                             isOpen: true,
@@ -1497,6 +1719,21 @@ function AppContent() {
 
                 <div className="space-y-12">
                   {/* Primary Results */}
+                  <div className="flex items-center gap-4 mb-8">
+                    <button 
+                      onClick={() => setJobSort('latest')}
+                      className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1 rounded-full transition-all ${jobSort === 'latest' ? 'bg-[#93C5FD] text-white' : 'bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'}`}
+                    >
+                      Latest Addition
+                    </button>
+                    <button 
+                      onClick={() => setJobSort('alpha')}
+                      className={`text-[10px] uppercase tracking-widest font-bold px-3 py-1 rounded-full transition-all ${jobSort === 'alpha' ? 'bg-[#93C5FD] text-white' : 'bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'}`}
+                    >
+                      Alphabetical
+                    </button>
+                  </div>
+
                   <div className="space-y-6">
                     {jobs.length === 0 ? (
                       <div className="py-24 text-center">
@@ -1539,7 +1776,14 @@ function AppContent() {
                         )}
                       </div>
                     ) : (
-                      jobs.map((job, index) => (
+                      jobs
+                        .sort((a, b) => {
+                          if (jobSort === 'alpha') return a.title.localeCompare(b.title);
+                          const dateA = a.found_at instanceof Timestamp ? a.found_at.toMillis() : new Date(a.found_at).getTime();
+                          const dateB = b.found_at instanceof Timestamp ? b.found_at.toMillis() : new Date(b.found_at).getTime();
+                          return dateB - dateA;
+                        })
+                        .map((job, index) => (
                         <motion.div 
                           key={job.id}
                           ref={el => jobRefs.current[job.id] = el}
@@ -1730,6 +1974,38 @@ function AppContent() {
               >
                 <X size={20} />
               </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Debug Modal */}
+        {debugModal && debugModal.isOpen && (
+          <div className="fixed inset-0 bg-[#2D3A29]/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white rounded-[40px] shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden border border-[#E8E4DE]"
+            >
+              <div className="p-8 border-b border-[#E8E4DE] flex justify-between items-center bg-[#FBF9F7]">
+                <div>
+                  <h3 className="font-serif italic text-3xl text-[#2D3A29]">Crawler Debug: {debugModal.sourceName}</h3>
+                  <p className="text-xs opacity-40 mt-1 uppercase tracking-widest font-bold">Raw text extracted from the page</p>
+                </div>
+                <button onClick={() => setDebugModal(null)} className="p-2 hover:bg-[#E8E4DE] rounded-full transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-8 overflow-y-auto flex-1 font-mono text-xs leading-relaxed bg-white whitespace-pre-wrap">
+                {debugModal.text}
+              </div>
+              <div className="p-8 border-t border-[#E8E4DE] bg-[#FBF9F7] flex justify-end">
+                <button 
+                  onClick={() => setDebugModal(null)}
+                  className="px-8 py-3 bg-[#2D3A29] text-white rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-[#1A2419] transition-all shadow-lg shadow-[#2D3A29]/20"
+                >
+                  Close
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

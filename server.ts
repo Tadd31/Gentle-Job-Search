@@ -20,7 +20,7 @@ async function startServer() {
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const commonHeaders = {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -74,19 +74,31 @@ async function startServer() {
         }
       }
 
-      // Handle 403: Try without some headers or with different ones
       if (response.status === 403) {
         console.log(`403 detected for ${urlStr}. Retrying with simplified headers...`);
         const retryResponse = await fetch(urlStr, {
           signal: controller.signal,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': '*/*',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
           }
         });
+        
         if (retryResponse.ok) {
           response = retryResponse;
+        } else {
+          const html = await retryResponse.text();
+          if (html.includes('cf-browser-verification') || html.includes('Cloudflare') || html.includes('Access Denied')) {
+            let hint = 'This website is protected by Cloudflare or similar bot protection.';
+            throw new Error(`Access denied (403). ${hint}`);
+          }
+          throw new Error('Access denied (403). The website might be blocking automated access.');
         }
+      }
+
+      if (response.status === 404) {
+        throw new Error('Page not found (404). Please check if the career page URL is still valid.');
       }
 
       if (!response.ok) {
@@ -96,8 +108,9 @@ async function startServer() {
       const html = await response.text();
       const $ = cheerio.load(html);
       
-      // Remove noise but keep more potential content areas
-      $('script, style, nav, footer, header, iframe, noscript').remove();
+      // Remove noise but keep potential content areas
+      // CRITICAL: Don't remove JSON-LD scripts yet!
+      $('script:not([type="application/ld+json"]), style, nav, footer, header, iframe, noscript').remove();
       
       // Preserve links by converting <a> tags to [text](href)
       $('a').each((_, el) => {
@@ -120,9 +133,27 @@ async function startServer() {
         }
       });
 
+      // Also look for JSON-LD which often contains job data even in SPAs
+      let jsonLdData = '';
+      $('script[type="application/ld+json"]').each((_, el) => {
+        const content = $(el).html();
+        if (content && content.includes('JobPosting')) {
+          jsonLdData += content + ' ';
+        }
+      });
+
+      // Now we can remove all scripts
+      $('script').remove();
+
       // Try to find the main content area if it exists
-      const mainContent = $('main, #content, .content, #main, [role="main"]').text() || $('body').text();
-      const text = mainContent.replace(/\s+/g, ' ').trim().substring(0, 25000);
+      let mainContent = $('main, #content, .content, #main, [role="main"]').text();
+      
+      // If main content is sparse, fallback to body but be more inclusive
+      if (!mainContent || mainContent.length < 500) {
+        mainContent = $('body').text();
+      }
+
+      const text = (mainContent + ' ' + jsonLdData).replace(/\s+/g, ' ').trim().substring(0, 30000);
       res.json({ text });
     } catch (error: any) {
       let message = error.message;
@@ -133,6 +164,24 @@ async function startServer() {
       res.status(500).json({ error: message });
     } finally {
       clearTimeout(timeout);
+    }
+  });
+
+  // Greenhouse API Proxy
+  app.get('/api/greenhouse-jobs', async (req, res) => {
+    const { boardId } = req.query;
+    if (!boardId) return res.status(400).json({ error: 'Board ID is required' });
+
+    try {
+      const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${boardId}/jobs`);
+      if (!response.ok) {
+        throw new Error(`Greenhouse API returned ${response.status}: ${response.statusText}`);
+      }
+      const data = await response.json();
+      res.json(data);
+    } catch (error: any) {
+      console.error(`Greenhouse fetch error for ${boardId}:`, error.message);
+      res.status(500).json({ error: error.message });
     }
   });
 
