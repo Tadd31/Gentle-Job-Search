@@ -203,6 +203,8 @@ function AppContent() {
     url: string;
   } | null>(null);
   const [newJobLink, setNewJobLink] = useState('');
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [lastAction, setLastAction] = useState<{ id: string; status: Job['status'] } | null>(null);
   const [modal, setModal] = useState<{
     isOpen: boolean;
     type: 'confirm' | 'alert';
@@ -210,6 +212,29 @@ function AppContent() {
     message: string;
     onConfirm?: () => void;
   } | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const handleLogin = async () => {
+    if (isLoggingIn) return;
+    setIsLoggingIn(true);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      console.error('Login error:', err);
+      if (err.code === 'auth/cancelled-popup-request') {
+        showAlert('Login Cancelled', 'The login popup was closed before completion. Please try again.');
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        // User closed the popup, no need for a scary alert
+        console.log('User closed the login popup');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        showAlert('Domain Not Authorized', 'This domain is not authorized in the Firebase console. Please add it to the authorized domains list.');
+      } else {
+        showAlert('Login Error', err.message || 'An unexpected error occurred during login.');
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
 
   // Auth Listener
   useEffect(() => {
@@ -255,14 +280,15 @@ function AppContent() {
 
     // Jobs Listener
     const jobsRef = collection(db, 'users', userId, 'jobs');
-    let jobsQuery = query(jobsRef, orderBy('found_at', 'desc'));
+    let jobsQuery = query(jobsRef);
     
     if (activeTab !== 'settings' && activeTab !== 'sources') {
-      jobsQuery = query(jobsRef, where('status', '==', activeTab), orderBy('found_at', 'desc'));
+      jobsQuery = query(jobsRef, where('status', '==', activeTab));
     }
 
     const unsubscribeJobs = onSnapshot(jobsQuery, (snapshot) => {
       const jobsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+      console.log(`[Firestore] Snapshot for tab "${activeTab}":`, jobsData.length, 'jobs');
       setJobs(jobsData);
     }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/jobs`));
 
@@ -633,6 +659,8 @@ function AppContent() {
 
   const handleUpdateJobStatus = async (id: string, status: Job['status']) => {
     if (!user) return;
+    console.log(`[Action] Updating job ${id} to status: ${status}`);
+    setLastAction({ id, status });
     try {
       if (status === 'applied') {
         confetti({
@@ -645,8 +673,9 @@ function AppContent() {
 
       const jobRef = doc(db, 'users', user.uid, 'jobs', id);
       await updateDoc(jobRef, { status });
+      console.log(`[Firestore] Job ${id} updated successfully`);
     } catch (err) {
-      console.error(err);
+      console.error('[Firestore] Error updating job status:', err);
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${id}`);
     }
   };
@@ -1152,11 +1181,16 @@ function AppContent() {
                 </div>
               ) : (
                 <button 
-                  onClick={signInWithGoogle}
-                  className="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all"
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  <LogIn size={14} />
-                  <span>Login</span>
+                  {isLoggingIn ? (
+                    <RefreshCw size={14} className="animate-spin" />
+                  ) : (
+                    <LogIn size={14} />
+                  )}
+                  <span>{isLoggingIn ? 'Logging in...' : 'Login'}</span>
                 </button>
               )}
               <button 
@@ -1734,164 +1768,255 @@ function AppContent() {
                     </button>
                   </div>
 
-                  <div className="space-y-6">
-                    {jobs.length === 0 ? (
-                      <div className="py-24 text-center">
-                        <div className="opacity-20">
-                          <Briefcase size={64} className="mx-auto mb-6" />
-                          <p className="font-serif italic text-2xl">The scout is resting.</p>
-                        </div>
-                        
-                        {lastCrawlReport && (
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="mt-12 max-w-lg mx-auto p-8 rounded-3xl bg-[#F7F3EF]/50 border border-[#E8E4DE] text-left"
-                          >
-                            <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40 mb-6 flex items-center gap-2">
-                              <Zap size={12} className="text-[#93C5FD]" />
-                              Last Scout Report
-                            </h4>
-                            
-                            <div className="space-y-4">
-                              <p className="text-sm leading-relaxed text-[#4A443F]/80">
-                                Last scout checked <span className="font-bold text-[#2D3A29]">{lastCrawlReport.sourcesChecked} sources</span>. 
-                                {lastCrawlReport.sourcesUnreachable.length > 0 && (
-                                  <> {lastCrawlReport.sourcesUnreachable.length} were unreachable (<span className="italic">{lastCrawlReport.sourcesUnreachable.join(', ')}</span>).</>
-                                )}
-                                {lastCrawlReport.sourcesWithNoMatches > 0 && (
-                                  <> {lastCrawlReport.sourcesWithNoMatches} returned content but had no keyword matches.</>
-                                )}
-                                {lastCrawlReport.sourcesSkipped > 0 && (
-                                  <> {lastCrawlReport.sourcesSkipped} {lastCrawlReport.sourcesSkipped === 1 ? 'was' : 'were'} skipped (checked recently).</>
-                                )}
-                              </p>
-                              
-                              <div className="pt-4 border-t border-[#E8E4DE] flex items-center justify-between">
-                                <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">New Jobs Found</span>
-                                <span className="text-lg font-serif italic text-[#2D3A29]">{lastCrawlReport.newJobsFound}</span>
-                              </div>
-                            </div>
-                          </motion.div>
-                        )}
-                      </div>
-                    ) : (
-                      jobs
-                        .sort((a, b) => {
-                          if (jobSort === 'alpha') return a.title.localeCompare(b.title);
-                          const dateA = a.found_at instanceof Timestamp ? a.found_at.toMillis() : new Date(a.found_at).getTime();
-                          const dateB = b.found_at instanceof Timestamp ? b.found_at.toMillis() : new Date(b.found_at).getTime();
-                          return dateB - dateA;
-                        })
-                        .map((job, index) => (
-                        <motion.div 
-                          key={job.id}
-                          ref={el => jobRefs.current[job.id] = el}
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          onClick={() => setSelectedIndex(index)}
-                          className={`pastel-card p-8 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-8 items-start transition-all duration-300 ${selectedIndex === index ? 'ring-2 ring-[#93C5FD] shadow-xl scale-[1.01]' : 'hover:scale-[1.005]'}`}
-                        >
-                          <div className="space-y-4">
-                            <div className="flex items-center gap-4">
-                              <img src={getFavicon(job.link) || getFavicon(job.source_url) || ''} className="w-4 h-4 rounded-sm shadow-sm border border-[#E8E4DE]" alt="" />
-                              <div>
-                                <div className="flex items-center gap-3">
-                                  <h3 className="font-bold text-2xl tracking-tight text-[#2D3A29]">{job.title}</h3>
-                                  {!!job.is_broken && (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[9px] font-bold uppercase tracking-widest bg-red-500 text-white px-2 py-0.5 rounded-md flex items-center gap-1">
-                                        <AlertCircle size={10} /> Broken Link
-                                      </span>
-                                      <button 
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setEditingJobId(job.id);
-                                          setNewJobLink(job.link);
-                                        }}
-                                        className="text-[9px] font-bold uppercase tracking-widest text-[#93C5FD] hover:underline"
-                                      >
-                                        Update Link
-                                      </button>
+                  <div className="space-y-6 relative min-h-[400px]">
+                    <AnimatePresence mode="popLayout">
+                      {jobs.length > 0 ? (
+                        jobs
+                          .sort((a, b) => {
+                            if (jobSort === 'alpha') return a.title.localeCompare(b.title);
+                            const dateA = a.found_at instanceof Timestamp ? a.found_at.toMillis() : new Date(a.found_at).getTime();
+                            const dateB = b.found_at instanceof Timestamp ? b.found_at.toMillis() : new Date(b.found_at).getTime();
+                            return dateB - dateA;
+                          })
+                          .map((job, index) => (
+                            <motion.div 
+                              key={job.id}
+                              layout
+                              ref={el => jobRefs.current[job.id] = el}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ 
+                                opacity: 1, 
+                                y: 0,
+                                scale: selectedIndex === index ? 1.01 : 1,
+                                boxShadow: selectedIndex === index ? "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" : "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)"
+                              }}
+                              whileHover={{ scale: selectedIndex === index ? 1.01 : 1.005 }}
+                              exit={{ 
+                                opacity: 0, 
+                                x: lastAction?.id === job.id ? (lastAction.status === 'approved' ? 300 : lastAction.status === 'rejected' ? -300 : 0) : 0,
+                                y: lastAction?.id === job.id && lastAction.status === 'applied' ? -150 : 0,
+                                scale: 0.9,
+                                transition: { duration: 0.4, ease: "circOut" } 
+                              }}
+                              transition={{ 
+                                layout: { duration: 0.3 },
+                                opacity: { duration: 0.2 },
+                                y: { duration: 0.2 },
+                                scale: { duration: 0.2 }
+                              }}
+                              onClick={() => setSelectedIndex(index)}
+                              className={`pastel-card p-8 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-8 items-start ${
+                                selectedIndex === index ? 'ring-2 ring-[#93C5FD]' : ''
+                              } ${
+                                lastAction?.id === job.id ? (
+                                  lastAction.status === 'approved' ? 'bg-green-50/80 border-green-200' :
+                                  lastAction.status === 'rejected' ? 'bg-red-50/80 border-red-200' :
+                                  ''
+                                ) : ''
+                              }`}
+                            >
+                              <div className="space-y-4">
+                                <div className="flex items-center gap-4">
+                                  <img src={getFavicon(job.link) || getFavicon(job.source_url) || ''} className="w-4 h-4 rounded-sm shadow-sm border border-[#E8E4DE]" alt="" />
+                                  <div>
+                                    <div className="flex items-center gap-3">
+                                      <h3 className="font-bold text-2xl tracking-tight text-[#2D3A29]">{job.title}</h3>
+                                      {!!job.is_broken && (
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[9px] font-bold uppercase tracking-widest bg-red-500 text-white px-2 py-0.5 rounded-md flex items-center gap-1">
+                                            <AlertCircle size={10} /> Broken Link
+                                          </span>
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setEditingJobId(job.id);
+                                              setNewJobLink(job.link);
+                                            }}
+                                            className="text-[9px] font-bold uppercase tracking-widest text-[#93C5FD] hover:underline"
+                                          >
+                                            Update Link
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
-                                  )}
+                                    {editingJobId === job.id && (
+                                      <div className="mt-2 flex gap-2" onClick={e => e.stopPropagation()}>
+                                        <input 
+                                          type="url" 
+                                          className="input-field py-1 text-xs flex-1"
+                                          value={newJobLink}
+                                          onChange={e => setNewJobLink(e.target.value)}
+                                          placeholder="Paste new job link..."
+                                          autoFocus
+                                        />
+                                        <button 
+                                          onClick={() => handleUpdateJobLink(job.id)}
+                                          className="px-3 py-1 bg-[#93C5FD] text-white rounded-lg text-[10px] font-bold uppercase tracking-widest"
+                                        >
+                                          Save
+                                        </button>
+                                        <button 
+                                          onClick={() => setEditingJobId(null)}
+                                          className="px-3 py-1 bg-[#F7F3EF] text-[#4A443F]/40 rounded-lg text-[10px] font-bold uppercase tracking-widest"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    )}
+                                    <div className="flex items-center gap-4 mt-1 font-sans text-xs font-medium opacity-50">
+                                      <span className="flex items-center gap-1.5"><Home size={14} className="text-[#93C5FD]" /> {job.company}</span>
+                                      <span className="flex items-center gap-1.5"><MapPin size={14} className="text-[#93C5FD]" /> {job.location}</span>
+                                      <span className="flex items-center gap-1.5"><Coins size={14} className="text-[#93C5FD]" /> {job.salary || 'Unknown'}</span>
+                                      <span className="flex items-center gap-1.5 opacity-40">
+                                        <History size={12} /> 
+                                        {job.found_at instanceof Timestamp ? job.found_at.toDate().toLocaleDateString() : new Date(job.found_at).toLocaleDateString()}
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
-                                {editingJobId === job.id && (
-                                  <div className="mt-2 flex gap-2" onClick={e => e.stopPropagation()}>
-                                    <input 
-                                      type="url" 
-                                      className="input-field py-1 text-xs flex-1"
-                                      value={newJobLink}
-                                      onChange={e => setNewJobLink(e.target.value)}
-                                      placeholder="Paste new job link..."
-                                      autoFocus
-                                    />
+                                
+                                <p className="text-[#4A443F]/80 leading-relaxed text-sm max-w-3xl">{job.description}</p>
+                                
+                                <div className="flex items-center gap-3 pt-2">
+                                  <a 
+                                    href={job.link} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    onClick={e => e.stopPropagation()}
+                                    className="btn-primary flex items-center gap-2"
+                                  >
+                                    <span>View Listing</span>
+                                    <ArrowUpRight size={16} />
+                                  </a>
+                                  <div className="flex items-center gap-2">
                                     <button 
-                                      onClick={() => handleUpdateJobLink(job.id)}
-                                      className="px-3 py-1 bg-[#93C5FD] text-white rounded-lg text-[10px] font-bold uppercase tracking-widest"
+                                      onClick={() => handleUpdateJobStatus(job.id, 'approved')}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#2D3A29]/10 hover:border-[#2D3A29] ${job.status === 'approved' ? 'bg-[#2D3A29] text-white border-[#2D3A29]' : 'text-[#4A443F]/40'}`}
+                                      title="Approve"
                                     >
-                                      Save
+                                      <ThumbsUp size={20} />
                                     </button>
                                     <button 
-                                      onClick={() => setEditingJobId(null)}
-                                      className="px-3 py-1 bg-[#F7F3EF] text-[#4A443F]/40 rounded-lg text-[10px] font-bold uppercase tracking-widest"
+                                      onClick={() => handleUpdateJobStatus(job.id, 'rejected')}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#C3A0A0]/10 hover:border-[#C3A0A0] ${job.status === 'rejected' ? 'bg-[#C3A0A0] text-white border-[#C3A0A0]' : 'text-[#4A443F]/40'}`}
+                                      title="Reject"
                                     >
-                                      Cancel
+                                      <ThumbsDown size={20} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleUpdateJobStatus(job.id, 'applied')}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'applied' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'}`}
+                                      title="Mark as Applied"
+                                    >
+                                      <PenLine size={20} />
                                     </button>
                                   </div>
-                                )}
-                                <div className="flex items-center gap-4 mt-1 font-sans text-xs font-medium opacity-50">
-                                  <span className="flex items-center gap-1.5"><Home size={14} className="text-[#93C5FD]" /> {job.company}</span>
-                                  <span className="flex items-center gap-1.5"><MapPin size={14} className="text-[#93C5FD]" /> {job.location}</span>
-                                  <span className="flex items-center gap-1.5"><Coins size={14} className="text-[#93C5FD]" /> {job.salary || 'Unknown'}</span>
-                                  <span className="flex items-center gap-1.5 opacity-40">
-                                    <History size={12} /> 
-                                    {job.found_at instanceof Timestamp ? job.found_at.toDate().toLocaleDateString() : new Date(job.found_at).toLocaleDateString()}
-                                  </span>
+                                </div>
+                              </div>
+                              <div className="hidden md:block text-right">
+                                <p className="font-mono text-[9px] uppercase tracking-widest opacity-30 font-bold">Source</p>
+                                <p className="text-[10px] opacity-40 truncate max-w-[150px] font-medium">{new URL(job.source_url).hostname}</p>
+                              </div>
+                            </motion.div>
+                          ))
+                      ) : (
+                        <motion.div 
+                          key="empty"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          className="py-24 text-center"
+                        >
+                          {sources.length === 0 && activeTab === 'new' ? (
+                            <div className="max-w-md mx-auto text-left pastel-card p-10 bg-white/60">
+                              <h3 className="text-2xl font-serif italic mb-6 text-[#2D3A29]">Getting Started</h3>
+                              <div className="space-y-6">
+                                <div className="flex gap-4">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${user ? 'bg-green-500/20 text-green-600' : 'bg-[#93C5FD]/20 text-[#93C5FD]'}`}>
+                                    {user ? <Check size={16} /> : '1'}
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-[#2D3A29]">Login to create your account</p>
+                                    <p className="text-sm opacity-60">Click the <LogIn size={12} className="inline mx-1" /> icon in the header to sync your data.</p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-4">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${sources.length > 0 ? 'bg-green-500/20 text-green-600' : 'bg-[#93C5FD]/20 text-[#93C5FD]'}`}>
+                                    {sources.length > 0 ? <Check size={16} /> : '2'}
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-[#2D3A29]">Add your first source</p>
+                                    <p className="text-sm opacity-60">Go to the <button onClick={() => setActiveTab('sources')} className="text-[#93C5FD] hover:underline font-bold">Sources</button> tab and add a career page URL.</p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-4">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${profile.keywords ? 'bg-green-500/20 text-green-600' : 'bg-[#93C5FD]/20 text-[#93C5FD]'}`}>
+                                    {profile.keywords ? <Check size={16} /> : '3'}
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-[#2D3A29]">Set your keywords</p>
+                                    <p className="text-sm opacity-60">In <button onClick={() => setActiveTab('settings')} className="text-[#93C5FD] hover:underline font-bold">Settings</button>, add keywords like "Product Designer" or "React Developer".</p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-4">
+                                  <div className="w-8 h-8 rounded-full bg-[#93C5FD]/20 text-[#93C5FD] flex items-center justify-center font-bold text-sm shrink-0">4</div>
+                                  <div>
+                                    <p className="font-bold text-[#2D3A29]">Start Scout</p>
+                                    <p className="text-sm opacity-60">Click the <RefreshCw size={12} className="inline mx-1" /> icon in the header to find matching jobs.</p>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                            
-                            <p className="text-[#4A443F]/80 leading-relaxed text-sm max-w-3xl">{job.description}</p>
-                            <div className="flex items-center gap-3 pt-2">
-                              <a 
-                                href={job.link} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="btn-primary flex items-center gap-2"
-                              >
-                                <span>View Listing</span>
-                                <ArrowUpRight size={16} />
-                              </a>
-                              <button 
-                                onClick={() => handleUpdateJobStatus(job.id, 'approved')}
-                                className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'approved' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'}`}
-                              >
-                                <ThumbsUp size={20} />
-                              </button>
-                              <button 
-                                onClick={() => handleUpdateJobStatus(job.id, 'rejected')}
-                                className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#C3A0A0]/10 hover:border-[#C3A0A0] ${job.status === 'rejected' ? 'bg-[#C3A0A0] text-white border-[#C3A0A0]' : 'text-[#4A443F]/40'}`}
-                              >
-                                <ThumbsDown size={20} />
-                              </button>
-                              <button 
-                                onClick={() => handleUpdateJobStatus(job.id, 'applied')}
-                                className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'applied' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'}`}
-                                title="Mark as Applied"
-                              >
-                                <PenLine size={20} />
-                              </button>
+                          ) : (
+                            <div className="opacity-20">
+                              <Briefcase size={64} className="mx-auto mb-6" />
+                              <p className="font-serif italic text-2xl">
+                                {activeTab === 'approved' ? 'No approved jobs yet.' : 
+                                 activeTab === 'applied' ? 'No applications tracked.' :
+                                 activeTab === 'rejected' ? 'No rejected jobs.' :
+                                 'The scout is resting.'}
+                              </p>
+                              <div className="mt-6">
+                                {/* Buttons removed as requested */}
+                              </div>
                             </div>
-                          </div>
-                          <div className="hidden md:block text-right">
-                            <p className="font-mono text-[9px] uppercase tracking-widest opacity-30 font-bold">Source</p>
-                            <p className="text-[10px] opacity-40 truncate max-w-[150px] font-medium">{new URL(job.source_url).hostname}</p>
-                          </div>
+                          )}
+                          
+                          {lastCrawlReport && activeTab === 'new' && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="mt-12 max-w-lg mx-auto p-8 rounded-3xl bg-[#F7F3EF]/50 border border-[#E8E4DE] text-left"
+                            >
+                              <h4 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-40 mb-6 flex items-center gap-2">
+                                <Zap size={12} className="text-[#93C5FD]" />
+                                Last Scout Report
+                              </h4>
+                              
+                              <div className="space-y-4">
+                                <p className="text-sm leading-relaxed text-[#4A443F]/80">
+                                  Last scout checked <span className="font-bold text-[#2D3A29]">{lastCrawlReport.sourcesChecked} sources</span>. 
+                                  {lastCrawlReport.sourcesUnreachable.length > 0 && (
+                                    <> {lastCrawlReport.sourcesUnreachable.length} were unreachable (<span className="italic">{lastCrawlReport.sourcesUnreachable.join(', ')}</span>).</>
+                                  )}
+                                  {lastCrawlReport.sourcesWithNoMatches > 0 && (
+                                    <> {lastCrawlReport.sourcesWithNoMatches} returned content but had no keyword matches.</>
+                                  )}
+                                  {lastCrawlReport.sourcesSkipped > 0 && (
+                                    <> {lastCrawlReport.sourcesSkipped} {lastCrawlReport.sourcesSkipped === 1 ? 'was' : 'were'} skipped (checked recently).</>
+                                  )}
+                                </p>
+                                
+                                <div className="pt-4 border-t border-[#E8E4DE] flex items-center justify-between">
+                                  <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">New Jobs Found</span>
+                                  <span className="text-lg font-serif italic text-[#2D3A29]">{lastCrawlReport.newJobsFound}</span>
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
                         </motion.div>
-                      ))
-                    )}
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               </motion.div>
@@ -1900,15 +2025,60 @@ function AppContent() {
         </div>
 
         {/* Footer */}
-        <footer className="bg-white/40 border-t border-[#E8E4DE] p-4 flex justify-between items-center">
-        <div className="font-mono text-[9px] uppercase tracking-widest opacity-30 font-bold">
-          © 2026 Let's Go To Work • Handcrafted for a peaceful search
-        </div>
-        <div className="flex gap-6">
-          <a href="#" className="font-mono text-[9px] uppercase tracking-widest opacity-30 hover:opacity-100 transition-opacity font-bold">Privacy</a>
-          <a href="#" className="font-mono text-[9px] uppercase tracking-widest opacity-30 hover:opacity-100 transition-opacity font-bold">Terms</a>
-        </div>
-      </footer>
+        <footer className="bg-white/40 border-t border-[#E8E4DE] p-4 flex justify-between items-center relative">
+          <div className="font-mono text-[9px] uppercase tracking-widest opacity-30 font-bold">
+            © 2026 Let's Go To Work • Handcrafted for a peaceful search
+          </div>
+          
+          <div className="flex gap-6 items-center">
+            <button 
+              onClick={() => setShowShortcuts(!showShortcuts)}
+              className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-widest opacity-40 hover:opacity-100 transition-opacity font-bold bg-[#F7F3EF] px-3 py-1.5 rounded-lg"
+            >
+              <HelpCircle size={12} /> Keyboard Shortcuts
+            </button>
+            <a href="#" className="font-mono text-[9px] uppercase tracking-widest opacity-30 hover:opacity-100 transition-opacity font-bold">Privacy</a>
+            <a href="#" className="font-mono text-[9px] uppercase tracking-widest opacity-30 hover:opacity-100 transition-opacity font-bold">Terms</a>
+          </div>
+
+          <AnimatePresence>
+            {showShortcuts && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.95 }}
+                className="absolute bottom-16 right-4 w-64 bg-white rounded-2xl shadow-2xl border border-[#E8E4DE] p-6 z-[60]"
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#2D3A29]">Shortcuts</h4>
+                  <button onClick={() => setShowShortcuts(false)} className="opacity-20 hover:opacity-100"><X size={14} /></button>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] opacity-40 uppercase tracking-widest">Approve</span>
+                    <kbd className="px-2 py-1 bg-[#F7F3EF] rounded text-[10px] font-bold">J</kbd>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] opacity-40 uppercase tracking-widest">Reject</span>
+                    <kbd className="px-2 py-1 bg-[#F7F3EF] rounded text-[10px] font-bold">K</kbd>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] opacity-40 uppercase tracking-widest">Applied</span>
+                    <kbd className="px-2 py-1 bg-[#F7F3EF] rounded text-[10px] font-bold">L</kbd>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] opacity-40 uppercase tracking-widest">Open Link</span>
+                    <kbd className="px-2 py-1 bg-[#F7F3EF] rounded text-[10px] font-bold">Enter</kbd>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] opacity-40 uppercase tracking-widest">Navigate</span>
+                    <kbd className="px-2 py-1 bg-[#F7F3EF] rounded text-[10px] font-bold">↑ ↓</kbd>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </footer>
     </main>
   </div>
 

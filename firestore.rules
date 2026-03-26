@@ -79,40 +79,41 @@ service cloud.firestore {
 
     function isValidProfile(data) {
       return hasRequiredFields(['keywords', 'location']) &&
-             data.keywords is string && data.keywords.size() < 500 &&
-             data.location is string && data.location.size() < 200 &&
-             (!('linkedin_url' in data) || isValidUrl(data.linkedin_url)) &&
-             (!('min_salary' in data) || data.min_salary is int) &&
+             data.keywords is string && data.keywords.size() < 1000 &&
+             data.location is string && data.location.size() < 500 &&
+             (!('linkedin_url' in data) || data.linkedin_url is string) &&
+             (!('min_salary' in data) || data.min_salary is int || data.min_salary == null) &&
              (!('search_mode' in data) || data.search_mode in ['strict', 'discovery']) &&
-             (!('crawl_interval' in data) || data.crawl_interval is int);
+             (!('crawl_interval' in data) || data.crawl_interval is int || data.crawl_interval == null);
     }
 
     function isValidSource(data) {
       return hasRequiredFields(['url', 'name']) &&
-             isValidUrl(data.url) &&
-             data.name is string && data.name.size() < 100 &&
-             (!('is_broken' in data) || data.is_broken is bool) &&
-             (!('last_error' in data) || data.last_error is string) &&
-             (!('last_crawled' in data) || data.last_crawled is timestamp) &&
-             (!('jobs_found' in data) || data.jobs_found is int);
+             data.url is string &&
+             data.name is string && data.name.size() < 200 &&
+             (!('is_broken' in data) || data.is_broken is bool || data.is_broken == null) &&
+             (!('last_error' in data) || data.last_error is string || data.last_error == null) &&
+             (!('last_crawled' in data) || data.last_crawled is timestamp || data.last_crawled is string || data.last_crawled == null) &&
+             (!('jobs_found' in data) || data.jobs_found is int || data.jobs_found == null);
     }
 
     function isValidJob(data) {
       return hasRequiredFields(['title', 'company', 'link', 'status']) &&
-             data.title is string && data.title.size() < 200 &&
-             data.company is string && data.company.size() < 200 &&
-             isValidUrl(data.link) &&
+             data.title is string && data.title.size() < 500 &&
+             data.company is string && data.company.size() < 500 &&
+             data.link is string &&
              data.status in ['new', 'past', 'approved', 'rejected', 'applied'] &&
-             (!('location' in data) || data.location is string) &&
-             (!('source_url' in data) || isValidUrl(data.source_url)) &&
-             (!('found_at' in data) || data.found_at is timestamp) &&
-             (!('description' in data) || data.description is string) &&
-             (!('is_recommendation' in data) || data.is_recommendation is bool) &&
-             (!('salary' in data) || data.salary is string) &&
-             (!('seniority' in data) || data.seniority is string) &&
-             (!('match_score' in data) || data.match_score is int) &&
-             (!('match_reason' in data) || data.match_reason is string) &&
-             (!('is_broken' in data) || data.is_broken is bool);
+             (!('id' in data) || data.id is string) &&
+             (!('location' in data) || data.location is string || data.location == null) &&
+             (!('source_url' in data) || data.source_url is string || data.source_url == null) &&
+             (!('found_at' in data) || data.found_at is timestamp || data.found_at is string || data.found_at == null) &&
+             (!('description' in data) || data.description is string || data.description == null) &&
+             (!('is_recommendation' in data) || data.is_recommendation is bool || data.is_recommendation == null) &&
+             (!('salary' in data) || data.salary is string || data.salary == null) &&
+             (!('seniority' in data) || data.seniority is string || data.seniority == null) &&
+             (!('match_score' in data) || data.match_score is int || data.match_score == null) &&
+             (!('match_reason' in data) || data.match_reason is string || data.match_reason == null) &&
+             (!('is_broken' in data) || data.is_broken is bool || data.is_broken == null);
     }
 
     // ===============================================================
