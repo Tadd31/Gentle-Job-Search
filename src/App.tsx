@@ -221,13 +221,13 @@ function AppContent() {
       await signInWithGoogle();
     } catch (err: any) {
       console.error('Login error:', err);
-      if (err.code === 'auth/cancelled-popup-request') {
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
         showAlert('Login Cancelled', 'The login popup was closed before completion. Please try again.');
-      } else if (err.code === 'auth/popup-closed-by-user') {
-        // User closed the popup, no need for a scary alert
-        console.log('User closed the login popup');
+      } else if (err.code === 'auth/popup-blocked') {
+        showAlert('Popup Blocked', 'The login popup was blocked by your browser. Please allow popups for this site and try again.');
       } else if (err.code === 'auth/unauthorized-domain') {
-        showAlert('Domain Not Authorized', 'This domain is not authorized in the Firebase console. Please add it to the authorized domains list.');
+        const currentDomain = window.location.hostname;
+        showAlert('Domain Not Authorized', `The domain "${currentDomain}" is not authorized in the Firebase console. Please add it to the "Authorized domains" list in Firebase Authentication settings.`);
       } else {
         showAlert('Login Error', err.message || 'An unexpected error occurred during login.');
       }
@@ -1183,14 +1183,18 @@ function AppContent() {
                 <button 
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all ${isLoggingIn ? 'opacity-70 cursor-wait' : ''}`}
                 >
-                  {isLoggingIn ? (
-                    <RefreshCw size={14} className="animate-spin" />
-                  ) : (
-                    <LogIn size={14} />
-                  )}
-                  <span>{isLoggingIn ? 'Logging in...' : 'Login'}</span>
+                  <div className="relative flex items-center justify-center">
+                    {isLoggingIn ? (
+                      <RefreshCw size={14} className="animate-spin text-[#93C5FD]" />
+                    ) : (
+                      <LogIn size={14} />
+                    )}
+                  </div>
+                  <span className={isLoggingIn ? 'text-[#93C5FD]' : ''}>
+                    {isLoggingIn ? 'Authenticating...' : 'Login'}
+                  </span>
                 </button>
               )}
               <button 
