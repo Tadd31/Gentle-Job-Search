@@ -1,5 +1,6 @@
 // The Job Scout Clipper - Popup Script
-const API_BASE_URL = "__API_BASE_URL__"; // This will be replaced by the server
+const API_BASE_URL = "__API_BASE_URL__";
+const FRONTEND_URL = "__FRONTEND_URL__";
 
 document.addEventListener('DOMContentLoaded', async () => {
   const authCheck = document.getElementById('auth-check');
@@ -39,7 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     authCheck.innerHTML = `
       <div class="icon">🔒</div>
       <p class="error">Not connected to The Job Scout.</p>
-      <p style="font-size: 10px; margin-top: 8px; line-height: 1.4;">Please make sure you are logged in at <br/> <a href="${API_BASE_URL}" target="_blank" style="color: var(--accent); text-decoration: none; font-weight: bold;">${API_BASE_URL.replace('https://', '')}</a></p>
+      <p style="font-size: 10px; margin-top: 8px; line-height: 1.4;">Please make sure you are logged in at <br/> <a href="${FRONTEND_URL}" target="_blank" style="color: var(--accent); text-decoration: none; font-weight: bold;">${FRONTEND_URL.replace('https://', '')}</a></p>
     `;
   }
 

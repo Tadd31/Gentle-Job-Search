@@ -990,6 +990,8 @@ function AppContent() {
               3. LOCATION PRECISION: The user is looking for jobs in ${profile.location}. Be flexible with sub-regions (e.g., if they want "London", "Central London" is fine).
               4. SALARY EXTRACTION: Look for salary information.
               5. SENIORITY EXTRACTION: Look for seniority level.
+              6. MATCHING: Even if a job title doesn't exactly match a keyword, if it's a similar role (e.g., "Application Developer" for "Software Engineer"), include it.
+              7. NO MATCHES: If no jobs match the criteria, return an empty array [].
 
               LINK EXTRACTION RULES:
               - Find the MOST DIRECT link to the specific job description page.
@@ -1007,12 +1009,23 @@ function AppContent() {
               - description (short summary)
               - salary (e.g., "£40,000 - £50,000" or "Unknown")
               - seniority (e.g., "Senior")
-
-              If no jobs match the criteria, return an empty array [].
             `;
 
             const result = await generateWithRetry(prompt);
-            extractedJobs = JSON.parse(result.text || '[]');
+            const resultText = result.text || '[]';
+            
+            // Robust JSON extraction
+            try {
+              const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+              if (jsonMatch) {
+                extractedJobs = JSON.parse(jsonMatch[0]);
+              } else {
+                extractedJobs = JSON.parse(resultText);
+              }
+            } catch (e) {
+              console.error('Failed to parse Gemini JSON:', resultText);
+              extractedJobs = [];
+            }
           }
           
           // Deduplication by URL
@@ -1365,7 +1378,7 @@ function AppContent() {
                       </ol>
                       <div className="p-4 bg-[#93C5FD]/5 border border-[#93C5FD]/10 rounded-2xl">
                         <p className="text-[10px] text-[#2D3A29]/60 leading-relaxed">
-                          <strong>Pro Tip:</strong> Make sure you are logged in to this app before using the extension. If you just logged in, you might need to close and reopen the extension popup.
+                          <strong>Pro Tip:</strong> Make sure you are logged in to <a href="https://workscout.netlify.app/" target="_blank" className="text-[#93C5FD] underline">workscout.netlify.app</a> before using the extension. If you just logged in, you might need to close and reopen the extension popup.
                         </p>
                       </div>
                     </div>

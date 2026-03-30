@@ -17,8 +17,14 @@ async function startServer() {
   // CORS Middleware for extension
   app.use((req, res, next) => {
     const origin = req.headers.origin;
-    // Allow extension origin (chrome-extension://...) or the app itself
-    if (origin && (origin.startsWith('chrome-extension://') || origin === process.env.APP_URL)) {
+    const frontendUrl = process.env.FRONTEND_URL;
+    
+    // Allow extension origin (chrome-extension://...), the app itself, or the Netlify frontend
+    if (origin && (
+      origin.startsWith('chrome-extension://') || 
+      origin === process.env.APP_URL || 
+      (frontendUrl && origin === frontendUrl.replace(/\/$/, ''))
+    )) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -164,7 +170,7 @@ async function startServer() {
       
       // Remove noise but keep potential content areas
       // CRITICAL: Don't remove JSON-LD scripts yet!
-      $('script:not([type="application/ld+json"]), style, nav, footer, header, iframe, noscript').remove();
+      $('script:not([type="application/ld+json"]), style, iframe, noscript').remove();
       
       // Preserve links by converting <a> tags to [text](href)
       $('a').each((_, el) => {
@@ -200,10 +206,13 @@ async function startServer() {
       $('script').remove();
 
       // Try to find the main content area if it exists
-      let mainContent = $('main, #content, .content, #main, [role="main"]').text();
+      let mainContent = $('main, #content, .content, #main, [role="main"], article, .jobs-list, .vacancies-list, [class*="job-list"], [class*="vacancy-list"], [class*="career-list"]').text();
       
-      // If main content is sparse, fallback to body but be more inclusive
-      if (!mainContent || mainContent.length < 500) {
+      // If main content is sparse or doesn't seem to contain jobs, fallback to body
+      const jobKeywords = ['job', 'vacancy', 'career', 'position', 'role', 'apply', 'salary'];
+      const hasJobKeywords = jobKeywords.some(k => mainContent.toLowerCase().includes(k));
+
+      if (!mainContent || mainContent.length < 500 || !hasJobKeywords) {
         mainContent = $('body').text();
       }
 
@@ -245,6 +254,7 @@ async function startServer() {
       const zip = new JSZip();
       const extensionDir = path.resolve('extension');
       const appUrl = process.env.APP_URL || `http://localhost:3000`;
+      const frontendUrl = process.env.FRONTEND_URL || appUrl;
 
       // Add files to ZIP
       const manifest = await fs.readFile(path.join(extensionDir, 'manifest.json'), 'utf8');
@@ -252,8 +262,10 @@ async function startServer() {
       const popupCss = await fs.readFile(path.join(extensionDir, 'popup.css'), 'utf8');
       const popupJsTemplate = await fs.readFile(path.join(extensionDir, 'popup.js.template'), 'utf8');
 
-      // Replace placeholder in popup.js
-      const popupJs = popupJsTemplate.replace('__API_BASE_URL__', appUrl);
+      // Replace placeholders in popup.js
+      const popupJs = popupJsTemplate
+        .replace('__API_BASE_URL__', appUrl)
+        .replace('__FRONTEND_URL__', frontendUrl);
 
       zip.file('manifest.json', manifest);
       zip.file('popup.html', popupHtml);
