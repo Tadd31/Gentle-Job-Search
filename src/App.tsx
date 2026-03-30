@@ -33,7 +33,8 @@ import {
   HelpCircle,
   LogOut,
   LogIn,
-  User as UserIcon
+  User as UserIcon,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
@@ -213,6 +214,7 @@ function AppContent() {
     onConfirm?: () => void;
   } | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
 
   const handleLogin = async () => {
     if (isLoggingIn) return;
@@ -289,6 +291,7 @@ function AppContent() {
     const unsubscribeJobs = onSnapshot(jobsQuery, (snapshot) => {
       const jobsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
       console.log(`[Firestore] Snapshot for tab "${activeTab}":`, jobsData.length, 'jobs');
+      console.log(`[Firestore] Job IDs in snapshot:`, jobsData.map(j => j.id));
       setJobs(jobsData);
     }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/jobs`));
 
@@ -298,6 +301,13 @@ function AppContent() {
       unsubscribeJobs();
     };
   }, [user, isAuthReady, activeTab]);
+
+  useEffect(() => {
+    if (lastAction) {
+      const timer = setTimeout(() => setLastAction(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [lastAction]);
 
   const showAlert = (title: string, message: string) => {
     setModal({ isOpen: true, type: 'alert', title, message });
@@ -659,8 +669,16 @@ function AppContent() {
 
   const handleUpdateJobStatus = async (id: string, status: Job['status']) => {
     if (!user) return;
-    console.log(`[Action] Updating job ${id} to status: ${status}`);
+    console.log(`[Action] Starting update for job ${id} to status: ${status}`);
+    setUpdatingJobId(id);
     setLastAction({ id, status });
+    
+    // Clear selection if the updating job is the selected one
+    setSelectedIndex(prev => {
+      if (prev >= 0 && jobs[prev]?.id === id) return -1;
+      return prev;
+    });
+
     try {
       if (status === 'applied') {
         confetti({
@@ -672,11 +690,16 @@ function AppContent() {
       }
 
       const jobRef = doc(db, 'users', user.uid, 'jobs', id);
+      console.log(`[Firestore] Updating document: users/${user.uid}/jobs/${id}`);
       await updateDoc(jobRef, { status });
-      console.log(`[Firestore] Job ${id} updated successfully`);
+      console.log(`[Firestore] Update successful for job ${id}`);
     } catch (err) {
       console.error('[Firestore] Error updating job status:', err);
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${id}`);
+    } finally {
+      // Small delay to ensure the animation has a chance to start before the spinner disappears
+      // though the removal is triggered by the snapshot, not this state.
+      setTimeout(() => setUpdatingJobId(null), 100);
     }
   };
 
@@ -1772,7 +1795,7 @@ function AppContent() {
                     </button>
                   </div>
 
-                  <div className="space-y-6 relative min-h-[400px]">
+                  <div className="space-y-6 relative min-h-[400px] overflow-hidden">
                     <AnimatePresence mode="popLayout">
                       {jobs.length > 0 ? (
                         jobs
@@ -1797,10 +1820,10 @@ function AppContent() {
                               whileHover={{ scale: selectedIndex === index ? 1.01 : 1.005 }}
                               exit={{ 
                                 opacity: 0, 
-                                x: lastAction?.id === job.id ? (lastAction.status === 'approved' ? 300 : lastAction.status === 'rejected' ? -300 : 0) : 0,
-                                y: lastAction?.id === job.id && lastAction.status === 'applied' ? -150 : 0,
+                                x: lastAction?.id === job.id ? (lastAction.status === 'approved' ? 500 : lastAction.status === 'rejected' ? -500 : 0) : 0,
+                                y: lastAction?.id === job.id && lastAction.status === 'applied' ? -200 : 0,
                                 scale: 0.9,
-                                transition: { duration: 0.4, ease: "circOut" } 
+                                transition: { duration: 0.5, ease: [0.32, 0.72, 0, 1] } 
                               }}
                               transition={{ 
                                 layout: { duration: 0.3 },
@@ -1895,24 +1918,27 @@ function AppContent() {
                                   <div className="flex items-center gap-2">
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'approved')}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#2D3A29]/10 hover:border-[#2D3A29] ${job.status === 'approved' ? 'bg-[#2D3A29] text-white border-[#2D3A29]' : 'text-[#4A443F]/40'}`}
+                                      disabled={updatingJobId === job.id}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#2D3A29]/10 hover:border-[#2D3A29] ${job.status === 'approved' ? 'bg-[#2D3A29] text-white border-[#2D3A29]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Approve"
                                     >
-                                      <ThumbsUp size={20} />
+                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <ThumbsUp size={20} />}
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'rejected')}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#C3A0A0]/10 hover:border-[#C3A0A0] ${job.status === 'rejected' ? 'bg-[#C3A0A0] text-white border-[#C3A0A0]' : 'text-[#4A443F]/40'}`}
+                                      disabled={updatingJobId === job.id}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#C3A0A0]/10 hover:border-[#C3A0A0] ${job.status === 'rejected' ? 'bg-[#C3A0A0] text-white border-[#C3A0A0]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Reject"
                                     >
-                                      <ThumbsDown size={20} />
+                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <ThumbsDown size={20} />}
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'applied')}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'applied' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'}`}
+                                      disabled={updatingJobId === job.id}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'applied' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Mark as Applied"
                                     >
-                                      <PenLine size={20} />
+                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <PenLine size={20} />}
                                     </button>
                                   </div>
                                 </div>

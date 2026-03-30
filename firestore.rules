@@ -34,6 +34,7 @@ service cloud.firestore {
     //   - found_at: timestamp (optional)
     //   - description: string (optional)
     //   - status: string (enum: ['new', 'past', 'approved', 'rejected', 'applied'])
+    //   - is_flagged: boolean (optional)
     //   - is_recommendation: boolean (optional)
     //   - salary: string (optional)
     //   - seniority: string (optional)
@@ -57,7 +58,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
           (request.auth.token.email == "c.tadd31@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -99,19 +101,20 @@ service cloud.firestore {
 
     function isValidJob(data) {
       return hasRequiredFields(['title', 'company', 'link', 'status']) &&
-             data.title is string && data.title.size() < 500 &&
-             data.company is string && data.company.size() < 500 &&
+             data.title is string && data.title.size() < 2000 &&
+             data.company is string && data.company.size() < 1000 &&
              data.link is string &&
              data.status in ['new', 'past', 'approved', 'rejected', 'applied'] &&
              (!('id' in data) || data.id is string) &&
              (!('location' in data) || data.location is string || data.location == null) &&
              (!('source_url' in data) || data.source_url is string || data.source_url == null) &&
-             (!('found_at' in data) || data.found_at is timestamp || data.found_at is string || data.found_at == null) &&
+             (!('found_at' in data) || data.found_at is timestamp || data.found_at is string || data.found_at is number || data.found_at == null) &&
              (!('description' in data) || data.description is string || data.description == null) &&
+             (!('is_flagged' in data) || data.is_flagged is bool || data.is_flagged == null) &&
              (!('is_recommendation' in data) || data.is_recommendation is bool || data.is_recommendation == null) &&
              (!('salary' in data) || data.salary is string || data.salary == null) &&
-             (!('seniority' in data) || data.seniority is string || data.seniority == null) &&
-             (!('match_score' in data) || data.match_score is int || data.match_score == null) &&
+             (!('seniority' in data) || data.seniority is string || data.seniority is number || data.seniority == null) &&
+             (!('match_score' in data) || data.match_score is number || data.match_score == null) &&
              (!('match_reason' in data) || data.match_reason is string || data.match_reason == null) &&
              (!('is_broken' in data) || data.is_broken is bool || data.is_broken == null);
     }
@@ -120,25 +123,12 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
-    match /users/{userId} {
-      allow read, write: if isOwner(userId) || isAdmin();
+    match /users/{userId}/jobs/{jobId} {
+      allow read, write: if request.auth != null && (request.auth.uid == userId || isAdmin());
+    }
 
-      match /profile/config {
-        allow read: if isOwner(userId) || isAdmin();
-        allow create, update: if (isOwner(userId) || isAdmin()) && isValidProfile(request.resource.data);
-      }
-
-      match /sources/{sourceId} {
-        allow read: if isOwner(userId) || isAdmin();
-        allow create, update: if (isOwner(userId) || isAdmin()) && isValidSource(request.resource.data);
-        allow delete: if isOwner(userId) || isAdmin();
-      }
-
-      match /jobs/{jobId} {
-        allow read: if isOwner(userId) || isAdmin();
-        allow create, update: if (isOwner(userId) || isAdmin()) && isValidJob(request.resource.data);
-        allow delete: if isOwner(userId) || isAdmin();
-      }
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && (request.auth.uid == userId || isAdmin());
     }
 
     // Default deny

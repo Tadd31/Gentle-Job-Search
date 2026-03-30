@@ -41,6 +41,7 @@
         "found_at": { "type": "string", "format": "date-time", "description": "When the job was first discovered" },
         "description": { "type": "string", "description": "Short summary of the job" },
         "status": { "type": "string", "enum": ["new", "past", "approved", "rejected", "applied"], "description": "User's status for this job" },
+        "is_flagged": { "type": "boolean", "description": "Whether the user has flagged this job as important" },
         "is_recommendation": { "type": "boolean", "description": "Whether this job was a discovery recommendation" },
         "salary": { "type": "string", "description": "Salary information" },
         "seniority": { "type": "string", "description": "Seniority level" },
