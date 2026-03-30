@@ -1,5 +1,5 @@
 {
-  "name": "Job Scout",
-  "description": "Automated job crawler that tracks opportunities from your favorite websites twice daily.",
+  "name": "The Job Scout",
+  "description": "Your personal career scout that monitors job boards and discovers hidden opportunities based on your unique profile.",
   "requestFramePermissions": []
 }

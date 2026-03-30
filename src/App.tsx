@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Plus,
   PlusCircle,
+  Menu,
   ArrowUpRight,
   ThumbsUp,
   ThumbsDown,
@@ -172,6 +173,7 @@ export default function App() {
 function AppContent() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('new');
   const [profile, setProfile] = useState<Profile>({
     keywords: '',
@@ -1089,90 +1091,126 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FBF9F7] text-[#4A443F] selection:bg-[#93C5FD]/30 selection:text-[#2D3A29]">
+    <div className="min-h-screen bg-[#FBF9F7] text-[#4A443F] selection:bg-[#93C5FD]/30 selection:text-[#2D3A29] overflow-x-hidden">
+      {/* Mobile Sidebar Backdrop */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[55] lg:hidden"
+          />
+        )}
+      </AnimatePresence>
+
       <div className="flex">
-        {/* Static Left Navigation */}
-        <aside className="w-72 h-screen fixed left-0 top-0 bg-white border-r border-[#E8E4DE] flex flex-col z-50">
-          <div className="p-8">
-            <div className="flex items-center gap-3 mb-12">
-              <button 
-                onClick={() => setIsZenMode(!isZenMode)}
-                className={`w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg transition-all duration-500 ${isZenMode ? 'bg-[#93C5FD] text-white shadow-[#93C5FD]/20 rotate-180' : 'bg-[#2D3A29] text-[#93C5FD] shadow-[#2D3A29]/20'}`}
-                title={isZenMode ? "Disable Zen Mode" : "Enable Zen Mode"}
-              >
-                {isZenMode ? <Waves size={20} /> : <Briefcase size={20} />}
-              </button>
-              <h1 className="font-serif italic text-2xl text-[#2D3A29] tracking-tight">Work Scout</h1>
-            </div>
-            
-            <nav className="space-y-2">
-              {[
-                { id: 'new', icon: Sparkles, label: 'New' },
-                { id: 'past', icon: History, label: 'Past' },
-                { id: 'approved', icon: ThumbsUp, label: 'Approved' },
-                { id: 'applied', icon: PenLine, label: 'Applied' },
-                { id: 'rejected', icon: ThumbsDown, label: 'Rejected' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id as Tab)}
-                  className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
-                    activeTab === tab.id 
-                      ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
-                      : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
-                  }`}
+        {/* Slide-in Navigation */}
+        <aside className={`w-72 h-screen fixed left-0 top-0 bg-white border-r border-[#E8E4DE] flex flex-col z-[60] transition-transform duration-500 ease-[0.32,0.72,0,1] lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
+          <div className="p-8 flex flex-col h-full">
+            <div className="flex flex-col gap-8 mb-12">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => setIsZenMode(!isZenMode)}
+                    className={`w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg transition-all duration-500 ${isZenMode ? 'bg-[#93C5FD] text-white shadow-[#93C5FD]/20 rotate-180' : 'bg-[#2D3A29] text-[#93C5FD] shadow-[#2D3A29]/20'}`}
+                    title={isZenMode ? "Disable Zen Mode" : "Enable Zen Mode"}
+                  >
+                    {isZenMode ? <Waves size={20} /> : <Briefcase size={20} />}
+                  </button>
+                  <h1 className="font-serif italic text-2xl text-[#2D3A29] tracking-tight">Work Scout</h1>
+                </div>
+                <button 
+                  onClick={() => setIsSidebarOpen(false)}
+                  className="lg:hidden p-2 hover:bg-gray-100 rounded-xl text-gray-400"
                 >
-                  <tab.icon size={20} className={activeTab === tab.id ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
-                  <span className="font-bold text-sm uppercase tracking-widest">{tab.label}</span>
-                  {activeTab === tab.id && <ChevronRight size={14} className="ml-auto opacity-40" />}
+                  <X size={20} />
                 </button>
-              ))}
-            </nav>
+              </div>
+              
+              <nav className="space-y-2">
+                {[
+                  { id: 'new', icon: Sparkles, label: 'New' },
+                  { id: 'past', icon: History, label: 'Past' },
+                  { id: 'approved', icon: ThumbsUp, label: 'Approved' },
+                  { id: 'applied', icon: PenLine, label: 'Applied' },
+                  { id: 'rejected', icon: ThumbsDown, label: 'Rejected' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id as Tab);
+                      if (window.innerWidth < 1024) setIsSidebarOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
+                      activeTab === tab.id 
+                        ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
+                        : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
+                    }`}
+                  >
+                    <tab.icon size={20} className={activeTab === tab.id ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
+                    <span className="font-bold text-sm uppercase tracking-widest">{tab.label}</span>
+                    {activeTab === tab.id && <ChevronRight size={14} className="ml-auto opacity-40" />}
+                  </button>
+                ))}
+              </nav>
+            </div>
 
-
-          </div>
-
-          <div className="mt-auto p-8 border-t border-[#E8E4DE] space-y-2">
-            <button
-              onClick={() => setActiveTab('sources')}
-              className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
-                activeTab === 'sources' 
-                  ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
-                  : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
-              }`}
-            >
-              <Globe size={20} className={activeTab === 'sources' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
-              <span className="font-bold text-sm uppercase tracking-widest">Sources</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
-                activeTab === 'settings' 
-                  ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
-                  : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
-              }`}
-            >
-              <UserIcon size={20} className={activeTab === 'settings' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
-              <span className="font-bold text-sm uppercase tracking-widest">Your Profile</span>
-            </button>
+            <div className="mt-auto space-y-2">
+              <button
+                onClick={() => {
+                  setActiveTab('sources');
+                  if (window.innerWidth < 1024) setIsSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
+                  activeTab === 'sources' 
+                    ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
+                    : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
+                }`}
+              >
+                <Globe size={20} className={activeTab === 'sources' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
+                <span className="font-bold text-sm uppercase tracking-widest">Sources</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('settings');
+                  if (window.innerWidth < 1024) setIsSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
+                  activeTab === 'settings' 
+                    ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
+                    : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
+                }`}
+              >
+                <UserIcon size={20} className={activeTab === 'settings' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
+                <span className="font-bold text-sm uppercase tracking-widest">Your Profile</span>
+              </button>
+            </div>
           </div>
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 ml-72 min-h-screen flex flex-col">
-          <header className="h-24 bg-white/40 backdrop-blur-md border-b border-[#E8E4DE] flex items-center justify-between px-12 sticky top-0 z-40">
-            <div className="flex items-center gap-6">
+        <main className="flex-1 lg:ml-72 min-h-screen flex flex-col w-full">
+          <header className="h-20 lg:h-24 bg-white/60 backdrop-blur-xl border-b border-[#E8E4DE] flex items-center justify-between px-4 lg:px-12 sticky top-0 z-50">
+            <div className="flex items-center gap-4 lg:gap-6">
+              <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="lg:hidden p-2 hover:bg-gray-100 rounded-xl text-[#2D3A29]"
+              >
+                <Menu size={24} />
+              </button>
               <div className="flex items-center gap-3">
                 <div className={`w-2 h-2 rounded-full ${isCrawling ? 'bg-[#93C5FD] animate-pulse' : 'bg-[#E8E4DE]'}`} />
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-40">
+                  <span className="text-[9px] lg:text-[10px] font-bold uppercase tracking-[0.2em] opacity-40">
                     {isCrawling ? 'Scouting Active' : 'System Ready'}
                   </span>
                   {isCrawling && crawlProgress && (
                     <motion.span 
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="text-[9px] font-mono opacity-60 text-[#2D3A29] truncate max-w-[200px]"
+                      className="text-[8px] lg:text-[9px] font-mono opacity-60 text-[#2D3A29] truncate max-w-[120px] lg:max-w-[200px]"
                     >
                       {crawlProgress}
                     </motion.span>
@@ -1181,12 +1219,12 @@ function AppContent() {
               </div>
             </div>
             
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 lg:gap-6">
               {user ? (
-                <div className="flex items-center gap-4">
-                  <div className="flex flex-col items-end">
+                <div className="flex items-center gap-2 lg:gap-4">
+                  <div className="hidden sm:flex flex-col items-end">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-[#2D3A29]">
-                      {user.displayName || 'User'}
+                      {user.displayName?.split(' ')[0] || 'User'}
                     </span>
                     <button 
                       onClick={logout}
@@ -1207,7 +1245,7 @@ function AppContent() {
                 <button 
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all ${isLoggingIn ? 'opacity-70 cursor-wait' : ''}`}
+                  className={`flex items-center gap-2 text-[10px] lg:text-[11px] uppercase tracking-widest font-bold text-[#2D3A29] hover:text-[#93C5FD] transition-all ${isLoggingIn ? 'opacity-70 cursor-wait' : ''}`}
                 >
                   <div className="relative flex items-center justify-center">
                     {isLoggingIn ? (
@@ -1216,42 +1254,35 @@ function AppContent() {
                       <LogIn size={14} />
                     )}
                   </div>
-                  <span className={isLoggingIn ? 'text-[#93C5FD]' : ''}>
-                    {isLoggingIn ? 'Authenticating...' : 'Login'}
+                  <span className={isLoggingIn ? 'text-[#93C5FD]' : 'hidden sm:inline'}>
+                    {isLoggingIn ? '...' : 'Login'}
                   </span>
                 </button>
               )}
-              <button 
-                onClick={handleResetData}
-                disabled={isResetting || !user}
-                className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-red-400/60 hover:text-red-500 transition-all hover:scale-105 ${!user ? 'opacity-20 cursor-not-allowed' : ''}`}
-                title="Reset All Job Data"
-              >
-                <Trash2 size={14} />
-                <span>Reset</span>
-              </button>
+              
               <button 
                 onClick={handleManualCrawl}
                 disabled={isCrawling || !user}
-                className={`btn-primary flex items-center gap-3 px-8 ${isCrawling || !user ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`btn-primary flex items-center gap-2 lg:gap-3 px-4 lg:px-8 py-2.5 lg:py-3 text-[10px] lg:text-xs ${isCrawling || !user ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {isCrawling ? (
                   <>
-                    <RefreshCw size={18} className="animate-spin" />
-                    <span>Scouting...</span>
+                    <RefreshCw size={16} className="animate-spin" />
+                    <span className="hidden sm:inline">Scouting...</span>
                   </>
                 ) : (
                   <>
-                    <Search size={18} />
-                    <span>Start Scouting</span>
+                    <Search size={16} />
+                    <span className="hidden sm:inline">Start Scouting</span>
+                    <span className="sm:hidden">Start</span>
                   </>
                 )}
               </button>
             </div>
           </header>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-12">
+          {/* Content Area */}
+          <div className="flex-1 overflow-y-auto p-4 lg:p-12">
           <AnimatePresence mode="wait">
             {activeTab === 'settings' ? (
               <motion.div 
