@@ -1,0 +1,97 @@
+// The Job Scout Clipper - Popup Script
+const API_BASE_URL = "__API_BASE_URL__"; // This will be replaced by the server
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const authCheck = document.getElementById('auth-check');
+  const clipForm = document.getElementById('clip-form');
+  const successMsg = document.getElementById('success-msg');
+  const errorMsg = document.getElementById('error-msg');
+  const errorText = document.getElementById('error-text');
+  const siteNameInput = document.getElementById('site-name');
+  const siteUrlInput = document.getElementById('site-url');
+  const clipBtn = document.getElementById('clip-btn');
+
+  // 1. Get current tab info
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab) {
+    siteUrlInput.value = tab.url;
+    siteNameInput.value = tab.title.split(' - ')[0].split(' | ')[0];
+  }
+
+  // 2. Check if user is authenticated
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/status`, {
+      credentials: 'include'
+    });
+    if (response.ok) {
+      const data = await response.json();
+      authCheck.classList.add('hidden');
+      clipForm.classList.remove('hidden');
+      // Show user name if available
+      if (data.user && data.user.displayName) {
+        const userName = data.user.displayName.split(' ')[0];
+        document.querySelector('.subtitle').textContent = `Clipper for ${userName} 🌊`;
+      }
+    } else {
+      throw new Error('Not connected to The Job Scout');
+    }
+  } catch (err) {
+    authCheck.innerHTML = `
+      <div class="icon">🔒</div>
+      <p class="error">Not connected to The Job Scout.</p>
+      <p style="font-size: 10px; margin-top: 8px; line-height: 1.4;">Please make sure you are logged in at <br/> <a href="${API_BASE_URL}" target="_blank" style="color: var(--accent); text-decoration: none; font-weight: bold;">${API_BASE_URL.replace('https://', '')}</a></p>
+    `;
+  }
+
+  // 3. Handle clipping
+  clipBtn.addEventListener('click', async () => {
+    const siteName = siteNameInput.value.trim();
+    const siteUrl = siteUrlInput.value.trim();
+
+    if (!siteName || !siteUrl) return;
+
+    clipBtn.disabled = true;
+    clipBtn.textContent = 'Clipping...';
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: siteName,
+          url: siteUrl,
+          type: 'manual'
+        }),
+      });
+
+      if (response.ok) {
+        clipForm.classList.add('hidden');
+        successMsg.classList.remove('hidden');
+      } else {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to clip source');
+      }
+    } catch (err) {
+      clipForm.classList.add('hidden');
+      errorMsg.classList.remove('hidden');
+      errorText.textContent = err.message;
+    } finally {
+      clipBtn.disabled = false;
+      clipBtn.textContent = 'Clip to Scout';
+    }
+  });
+
+  // 4. Close button
+  document.getElementById('close-btn').addEventListener('click', () => {
+    window.close();
+  });
+
+  // 5. Retry button
+  document.getElementById('retry-btn').addEventListener('click', () => {
+    errorMsg.classList.add('hidden');
+    clipForm.classList.remove('hidden');
+  });
+});

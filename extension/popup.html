@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>The Job Scout Clipper</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1 class="serif italic">The Job Scout</h1>
+        <p class="subtitle">Clipper 🌊</p>
+      </header>
+      <main id="main">
+        <div id="auth-check" class="status-msg">Checking connection...</div>
+        <div id="clip-form" class="hidden">
+          <div class="input-group">
+            <label>Site Name</label>
+            <input type="text" id="site-name" placeholder="e.g. Saga Careers">
+          </div>
+          <div class="input-group">
+            <label>URL</label>
+            <input type="url" id="site-url" readonly>
+          </div>
+          <button id="clip-btn" class="btn-primary">Clip to Scout</button>
+        </div>
+        <div id="success-msg" class="hidden status-msg">
+          <div class="icon">🌊</div>
+          <p>Successfully clipped!</p>
+          <button id="close-btn" class="btn-secondary">Close</button>
+        </div>
+        <div id="error-msg" class="hidden status-msg error">
+          <p id="error-text"></p>
+          <button id="retry-btn" class="btn-secondary">Retry</button>
+        </div>
+      </main>
+      <footer>
+        <p class="text-xs">v1.0.0 (Beta)</p>
+      </footer>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

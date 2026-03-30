@@ -36,7 +36,8 @@ import {
   LogOut,
   LogIn,
   User as UserIcon,
-  Loader2
+  Loader2,
+  Puzzle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
@@ -160,7 +161,7 @@ interface LastCrawlReport {
   newJobsFound: number;
 }
 
-type Tab = 'new' | 'past' | 'approved' | 'applied' | 'rejected' | 'settings' | 'sources';
+type Tab = 'new' | 'past' | 'approved' | 'applied' | 'rejected' | 'settings' | 'sources' | 'extension';
 
 export default function App() {
   return (
@@ -246,6 +247,17 @@ function AppContent() {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsAuthReady(true);
+      
+      // Sync session with server for browser extension
+      fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(u ? {
+          uid: u.uid,
+          email: u.email,
+          displayName: u.displayName
+        } : {})
+      }).catch(err => console.error('Failed to sync session:', err));
     });
     return () => unsubscribe();
   }, []);
@@ -1174,6 +1186,20 @@ function AppContent() {
               </button>
               <button
                 onClick={() => {
+                  setActiveTab('extension');
+                  if (window.innerWidth < 1024) setIsSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 group ${
+                  activeTab === 'extension' 
+                    ? 'bg-[#93C5FD]/10 text-[#2D3A29] shadow-sm ring-1 ring-[#93C5FD]/20' 
+                    : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
+                }`}
+              >
+                <Puzzle size={20} className={activeTab === 'extension' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
+                <span className="font-bold text-sm uppercase tracking-widest">Extension</span>
+              </button>
+              <button
+                onClick={() => {
                   setActiveTab('settings');
                   if (window.innerWidth < 1024) setIsSidebarOpen(false);
                 }}
@@ -1284,7 +1310,79 @@ function AppContent() {
           {/* Content Area */}
           <div className="flex-1 overflow-y-auto p-4 lg:p-12">
           <AnimatePresence mode="wait">
-            {activeTab === 'settings' ? (
+            {activeTab === 'extension' ? (
+              <motion.div 
+                key="extension"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="max-w-3xl mx-auto"
+              >
+                <div className="space-y-12">
+                  <div className="text-center space-y-4">
+                    <div className="w-20 h-20 bg-[#93C5FD]/10 rounded-[2.5rem] flex items-center justify-center mx-auto text-[#93C5FD] shadow-sm">
+                      <Puzzle size={40} />
+                    </div>
+                    <h2 className="font-serif italic text-5xl text-[#2D3A29]">The Scout Clipper</h2>
+                    <p className="text-lg opacity-60 max-w-xl mx-auto">Clip job boards directly from your browser and let the scout do the rest.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="pastel-card p-8 space-y-6">
+                      <h3 className="font-bold text-[#2D3A29] flex items-center gap-2">
+                        <Download className="w-5 h-5 text-[#93C5FD]" />
+                        Get the Extension
+                      </h3>
+                      <p className="text-sm text-[#4A443F]/70 leading-relaxed">
+                        Download the extension package and install it in your Chrome-based browser to start clipping sources instantly.
+                      </p>
+                      <a 
+                        href="/api/extension/download" 
+                        className="btn-primary w-full py-4 flex items-center justify-center gap-3 no-underline"
+                      >
+                        <Download size={18} />
+                        Download ZIP (v1.0.0)
+                      </a>
+                      <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3">
+                        <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+                        <p className="text-[10px] text-amber-700 leading-relaxed">
+                          <strong>Note:</strong> This is a Work-in-Progress (Beta). It may not be 100% reliable yet as we refine the connection logic.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pastel-card p-8 space-y-6">
+                      <h3 className="font-bold text-[#2D3A29] flex items-center gap-2">
+                        <Info className="w-5 h-5 text-[#93C5FD]" />
+                        How to Install
+                      </h3>
+                      <ol className="space-y-4 text-sm text-[#4A443F]/70 list-decimal list-inside">
+                        <li>Download and <strong>unzip</strong> the file.</li>
+                        <li>Open Chrome and go to <code className="bg-[#F7F3EF] px-1.5 py-0.5 rounded">chrome://extensions</code></li>
+                        <li>Enable <strong>Developer Mode</strong> (top right).</li>
+                        <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
+                        <li>Pin the 🌊 icon to your toolbar!</li>
+                      </ol>
+                      <div className="p-4 bg-[#93C5FD]/5 border border-[#93C5FD]/10 rounded-2xl">
+                        <p className="text-[10px] text-[#2D3A29]/60 leading-relaxed">
+                          <strong>Pro Tip:</strong> Make sure you are logged in to this app before using the extension. If you just logged in, you might need to close and reopen the extension popup.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pastel-card p-8 space-y-4">
+                    <h3 className="font-bold text-[#2D3A29]">How it Works</h3>
+                    <p className="text-sm text-[#4A443F]/70 leading-relaxed">
+                      The Scout Clipper lives in your browser toolbar. When you find a company's career page or a job board you want to monitor, simply open the extension and click <strong>"Clip to Scout"</strong>. 
+                    </p>
+                    <p className="text-sm text-[#4A443F]/70 leading-relaxed">
+                      The URL will be instantly added to your <strong>Sources</strong> list. The next time the scout runs its crawl, it will include this new site in its search for opportunities.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            ) : activeTab === 'settings' ? (
               <motion.div 
                 key="settings"
                 initial={{ opacity: 0, x: 20 }}

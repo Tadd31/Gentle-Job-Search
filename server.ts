@@ -3,16 +3,70 @@ import { createServer as createViteServer } from 'vite';
 import * as cheerio from 'cheerio';
 import path from 'path';
 import 'dotenv/config';
+import fs from 'fs-extra';
+import JSZip from 'jszip';
+import cookieParser from 'cookie-parser';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
+  app.use(cookieParser());
+
+  // CORS Middleware for extension
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    // Allow extension origin (chrome-extension://...) or the app itself
+    if (origin && (origin.startsWith('chrome-extension://') || origin === process.env.APP_URL)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    }
+    
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
 
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
+  });
+
+  // Session Management
+  app.post('/api/auth/session', (req, res) => {
+    const { uid, email, displayName } = req.body;
+    if (!uid) {
+      res.clearCookie('scout_session');
+      return res.json({ status: 'logged_out' });
+    }
+
+    // Set a simple session cookie
+    res.cookie('scout_session', JSON.stringify({ uid, email, displayName }), {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
+    res.json({ status: 'logged_in', user: { uid, email, displayName } });
+  });
+
+  app.get('/api/auth/status', (req, res) => {
+    const session = req.cookies.scout_session;
+    if (!session) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    try {
+      const user = JSON.parse(session);
+      res.json({ status: 'logged_in', user });
+    } catch (e) {
+      res.clearCookie('scout_session');
+      res.status(401).json({ error: 'Invalid session' });
+    }
   });
 
   app.get('/api/fetch-content', async (req, res) => {
@@ -183,6 +237,75 @@ async function startServer() {
       console.error(`Greenhouse fetch error for ${boardId}:`, error.message);
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // Extension ZIP Generation
+  app.get('/api/extension/download', async (req, res) => {
+    try {
+      const zip = new JSZip();
+      const extensionDir = path.resolve('extension');
+      const appUrl = process.env.APP_URL || `http://localhost:3000`;
+
+      // Add files to ZIP
+      const manifest = await fs.readFile(path.join(extensionDir, 'manifest.json'), 'utf8');
+      const popupHtml = await fs.readFile(path.join(extensionDir, 'popup.html'), 'utf8');
+      const popupCss = await fs.readFile(path.join(extensionDir, 'popup.css'), 'utf8');
+      const popupJsTemplate = await fs.readFile(path.join(extensionDir, 'popup.js.template'), 'utf8');
+
+      // Replace placeholder in popup.js
+      const popupJs = popupJsTemplate.replace('__API_BASE_URL__', appUrl);
+
+      zip.file('manifest.json', manifest);
+      zip.file('popup.html', popupHtml);
+      zip.file('popup.css', popupCss);
+      zip.file('popup.js', popupJs);
+
+      // Add a dummy icon if it doesn't exist
+      const iconPath = path.join(extensionDir, 'icon.png');
+      if (await fs.pathExists(iconPath)) {
+        const iconData = await fs.readFile(iconPath);
+        zip.file('icon.png', iconData);
+      } else {
+        // Create a simple 1x1 transparent pixel as a placeholder icon
+        const placeholderIcon = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
+        zip.file('icon.png', placeholderIcon);
+      }
+
+      const content = await zip.generateAsync({ type: 'nodebuffer' });
+      
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', 'attachment; filename=the-job-scout-clipper.zip');
+      res.send(content);
+    } catch (error: any) {
+      console.error('Extension ZIP generation error:', error);
+      res.status(500).json({ error: 'Failed to generate extension ZIP' });
+    }
+  });
+
+  // Source adding route for extension
+  app.post('/api/sources', (req, res) => {
+    const session = req.cookies.scout_session;
+    if (!session) {
+      return res.status(401).json({ error: 'Please log in to The Job Scout first.' });
+    }
+
+    const { name, url, type } = req.body;
+    let user;
+    try {
+      user = JSON.parse(session);
+    } catch (e) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.' });
+    }
+
+    console.log(`Extension clipped source for user ${user.uid}: ${name} (${url})`);
+    
+    // In a real app, we'd save this to Firestore here using Firebase Admin SDK.
+    // For now, we'll return success and log it.
+    res.json({ 
+      success: true, 
+      message: 'Source received! (Beta)',
+      user: user.displayName
+    });
   });
 
   // Vite middleware

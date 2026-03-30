@@ -1,0 +1,141 @@
+:root {
+  --bg: #F7F3EF;
+  --ink: #2D3A29;
+  --accent: #93C5FD;
+  --text-secondary: #4A443F;
+  --font-serif: 'Georgia', serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+.container {
+  padding: 24px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+.italic {
+  font-style: italic;
+}
+
+h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  opacity: 0.6;
+  margin-top: 4px;
+}
+
+.input-group {
+  margin-bottom: 16px;
+}
+
+label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  opacity: 0.4;
+  margin-bottom: 6px;
+}
+
+input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: white;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+input[readonly] {
+  background: rgba(0, 0, 0, 0.05);
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 12px;
+  background-color: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(147, 197, 253, 0.3);
+}
+
+.btn-primary:hover {
+  background-color: #60A5FA;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  margin-top: 12px;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.status-msg {
+  text-align: center;
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 24px 0;
+}
+
+.error {
+  color: #EF4444;
+  opacity: 1;
+}
+
+.hidden {
+  display: none;
+}
+
+.icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+footer {
+  margin-top: 24px;
+  text-align: center;
+  opacity: 0.4;
+}
+
+.text-xs {
+  font-size: 10px;
+}
