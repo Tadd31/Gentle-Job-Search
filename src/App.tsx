@@ -13,6 +13,7 @@ import {
   Home,
   ChevronRight,
   Plus,
+  PlusCircle,
   ArrowUpRight,
   ThumbsUp,
   ThumbsDown,
@@ -276,7 +277,7 @@ function AppContent() {
     // Sources Listener
     const sourcesRef = collection(db, 'users', userId, 'sources');
     const unsubscribeSources = onSnapshot(sourcesRef, (snapshot) => {
-      const sourcesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Source));
+      const sourcesData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Source));
       setSources(sourcesData);
     }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/sources`));
 
@@ -289,7 +290,7 @@ function AppContent() {
     }
 
     const unsubscribeJobs = onSnapshot(jobsQuery, (snapshot) => {
-      const jobsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+      const jobsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Job));
       console.log(`[Firestore] Snapshot for tab "${activeTab}":`, jobsData.length, 'jobs');
       console.log(`[Firestore] Job IDs in snapshot:`, jobsData.map(j => j.id));
       setJobs(jobsData);
@@ -1151,8 +1152,8 @@ function AppContent() {
                   : 'hover:bg-[#F7F3EF] text-[#4A443F]/40 hover:text-[#4A443F]'
               }`}
             >
-              <Settings2 size={20} className={activeTab === 'settings' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
-              <span className="font-bold text-sm uppercase tracking-widest">Settings</span>
+              <UserIcon size={20} className={activeTab === 'settings' ? 'text-[#93C5FD]' : 'group-hover:text-[#93C5FD] transition-colors'} />
+              <span className="font-bold text-sm uppercase tracking-widest">Your Profile</span>
             </button>
           </div>
         </aside>
@@ -1258,15 +1259,33 @@ function AppContent() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12"
+                className="max-w-2xl mx-auto"
               >
-                {/* Profile Settings */}
-                <div className="space-y-8">
-                  <div>
-                    <h2 className="font-serif italic text-3xl text-[#2D3A29]">Your Profile</h2>
-                    <p className="text-sm opacity-60">Help the scout find the right fit for you.</p>
+                {!user && (
+                  <div className="mb-12 p-6 bg-[#93C5FD]/10 border border-[#93C5FD]/20 rounded-3xl flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center text-[#93C5FD] shadow-sm">
+                      <LogIn size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-[#2D3A29]">Sign in to save your progress</h3>
+                      <p className="text-xs text-[#4A443F]/60">Logging in ensures your profile and job preferences are synced across devices.</p>
+                    </div>
+                    <button 
+                      onClick={handleLogin}
+                      className="ml-auto btn-primary py-2 px-6 text-[10px]"
+                    >
+                      Login Now
+                    </button>
                   </div>
-                  <form onSubmit={handleSaveProfile} className="space-y-6">
+                )}
+
+                {/* Profile Settings */}
+                <div className="space-y-8 pastel-card p-12">
+                  <div>
+                    <h2 className="font-serif italic text-4xl text-[#2D3A29]">Your Profile</h2>
+                    <p className="text-sm opacity-60 mt-2">Help the scout find the right fit for you.</p>
+                  </div>
+                  <form onSubmit={handleSaveProfile} className="space-y-8">
                     <div className="space-y-2">
                       <label className="font-sans text-[11px] uppercase tracking-widest font-bold opacity-40">Search Mode</label>
                       <div className="bg-[#F7F3EF] p-1 rounded-2xl flex gap-1">
@@ -1381,22 +1400,29 @@ function AppContent() {
                         <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 opacity-20 pointer-events-none" size={16} />
                       </div>
                     </div>
-                    <button type="submit" disabled={isSaving} className="btn-primary w-full">
+                    <button type="submit" disabled={isSaving} className="btn-primary w-full py-4 text-sm">
                       {isSaving ? 'Saving...' : 'Save Profile'}
                     </button>
                   </form>
                 </div>
-
-                {/* Source Settings */}
-                <div className="space-y-8">
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <h2 className="font-serif italic text-3xl text-[#2D3A29]">Crawl Sources</h2>
-                      <p className="text-sm opacity-60">Websites the scout should monitor.</p>
-                    </div>
+              </motion.div>
+            ) : activeTab === 'sources' ? (
+              <motion.div 
+                key="sources"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="max-w-7xl mx-auto"
+              >
+                <div className="flex justify-between items-end mb-8">
+                  <div>
+                    <h2 className="font-serif italic text-5xl text-[#2D3A29]">All Crawl Sources</h2>
+                    <p className="text-sm opacity-60 mt-2">The full list of websites your scout monitors for opportunities.</p>
+                  </div>
+                  <div className="flex items-center gap-6">
                     <button 
                       onClick={() => !isImporting && sourceFileInputRef.current?.click()}
-                      className={`text-[10px] uppercase tracking-widest font-bold transition-opacity flex items-center gap-2 ${isImporting ? 'text-[#93C5FD]' : 'opacity-40 hover:opacity-100'}`}
+                      className={`flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold transition-opacity ${isImporting ? 'text-[#93C5FD]' : 'opacity-40 hover:opacity-100'}`}
                       disabled={isImporting}
                     >
                       {isImporting ? (
@@ -1418,123 +1444,6 @@ function AppContent() {
                         onChange={handleBulkSourceUpload} 
                       />
                     </button>
-                  </div>
-
-                  <div className="mb-4">
-                    <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30">Manual Entry</h3>
-                  </div>
-
-                  <form onSubmit={handleAddSource} className="space-y-4">
-                    <input 
-                      type="text" 
-                      placeholder="Site Name (e.g. Saga Careers)"
-                      className="input-field"
-                      value={newSourceName}
-                      onChange={e => setNewSourceName(e.target.value)}
-                    />
-                    <div className="flex gap-2">
-                      <input 
-                        type="url" 
-                        placeholder="Job page URL"
-                        required
-                        className="input-field"
-                        value={newSourceUrl}
-                        onChange={e => setNewSourceUrl(e.target.value)}
-                      />
-                      <button type="submit" disabled={isAddingSource} className="bg-[#93C5FD] text-white p-3 rounded-xl hover:bg-[#60A5FA] transition-all">
-                        <Plus size={20} />
-                      </button>
-                    </div>
-                  </form>
-                  <div className="space-y-6">
-                    <div>
-                      <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold opacity-30 mb-4">Newly Added</h3>
-                      <div className="space-y-3">
-                        {sources.slice(0, 4).map(source => (
-                          <div key={source.id} className={`pastel-card p-4 flex justify-between items-center group ${source.is_broken ? 'border-red-200 bg-red-50/30' : ''}`}>
-                            <div className="flex items-center gap-3">
-                              <img src={getFavicon(source.url) || ''} className="w-4 h-4 rounded-sm" alt="" />
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <p className="text-sm font-semibold">{source.name}</p>
-                                  {!!source.is_broken && (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[8px] font-bold uppercase tracking-widest bg-red-500 text-white px-1.5 py-0.5 rounded flex items-center gap-1">
-                                        <AlertCircle size={8} /> Broken
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                                <p className="text-[10px] font-mono opacity-40 truncate max-w-[180px]">{source.url}</p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <a 
-                                href={source.url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-[#4A443F]/40 hover:text-[#93C5FD] transition-all p-2 hover:bg-[#93C5FD]/10 rounded-lg"
-                                title="Visit Site"
-                              >
-                                <ArrowUpRight size={16} />
-                              </a>
-                              <button 
-                                onClick={() => setSourceEditModal({
-                                  isOpen: true,
-                                  sourceId: source.id,
-                                  name: source.name,
-                                  url: source.url
-                                })}
-                                className="text-[#4A443F]/40 hover:text-[#93C5FD] transition-all p-2 hover:bg-[#93C5FD]/10 rounded-lg"
-                                title="Edit Source"
-                              >
-                                <PenLine size={16} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteSource(source.id)} 
-                                className={`text-red-400 transition-all p-2 hover:bg-red-50 rounded-lg ${source.is_broken ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                                title="Delete Source"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      {sources.length > 3 && (
-                        <button 
-                          onClick={() => setActiveTab('sources')}
-                          className="mt-4 text-[10px] uppercase tracking-widest font-bold text-[#93C5FD] hover:underline flex items-center gap-2"
-                        >
-                          <span>View All {sources.length} Sources</span>
-                          <ChevronRight size={12} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ) : activeTab === 'sources' ? (
-              <motion.div 
-                key="sources"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="max-w-7xl mx-auto"
-              >
-                <div className="flex justify-between items-end mb-8">
-                  <div>
-                    <h2 className="font-serif italic text-5xl text-[#2D3A29]">All Crawl Sources</h2>
-                    <p className="text-sm opacity-60 mt-2">The full list of websites your scout monitors for opportunities.</p>
-                  </div>
-                  <div className="flex items-center gap-6">
-                    <button 
-                      onClick={handleClearSources}
-                      className="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-red-400/60 hover:text-red-500 transition-all hover:scale-105"
-                    >
-                      <Trash2 size={14} />
-                      <span>Clear All</span>
-                    </button>
                     <button 
                       onClick={handleExportSources}
                       className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold opacity-40 hover:opacity-100 transition-opacity"
@@ -1542,11 +1451,49 @@ function AppContent() {
                       <Download size={14} />
                       <span>Export (CSV)</span>
                     </button>
+                    <button 
+                      onClick={handleClearSources}
+                      className="flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold text-red-400/60 hover:text-red-500 transition-all hover:scale-105"
+                    >
+                      <Trash2 size={14} />
+                      <span>Clear All</span>
+                    </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
-                  {/* Quick Add Greenhouse */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+                  {/* Manual Entry */}
+                  <div className="p-6 bg-[#F7F3EF] rounded-3xl border border-[#E8E4DE]">
+                    <h3 className="text-sm font-bold text-[#2D3A29] mb-2 flex items-center gap-2">
+                      <PlusCircle className="w-4 h-4 text-[#93C5FD]" />
+                      Manual Entry
+                    </h3>
+                    <p className="text-xs text-[#4A443F]/60 mb-4 leading-relaxed">
+                      Add a specific job board or career page URL manually to the scout's monitoring list.
+                    </p>
+                    <form onSubmit={handleAddSource} className="space-y-3">
+                      <input 
+                        type="text" 
+                        placeholder="Site Name (e.g. Saga Careers)"
+                        className="w-full p-3 text-sm border border-[#E8E4DE] rounded-xl focus:ring-2 focus:ring-[#93C5FD] outline-none bg-white"
+                        value={newSourceName}
+                        onChange={e => setNewSourceName(e.target.value)}
+                      />
+                      <div className="flex gap-2">
+                        <input 
+                          type="url" 
+                          placeholder="Job page URL"
+                          required
+                          className="flex-1 p-3 text-sm border border-[#E8E4DE] rounded-xl focus:ring-2 focus:ring-[#93C5FD] outline-none bg-white"
+                          value={newSourceUrl}
+                          onChange={e => setNewSourceUrl(e.target.value)}
+                        />
+                        <button type="submit" disabled={isAddingSource} className="bg-[#93C5FD] text-white p-3 rounded-xl hover:bg-[#60A5FA] transition-all shadow-lg shadow-[#93C5FD]/20">
+                          <Plus size={20} />
+                        </button>
+                      </div>
+                    </form>
+                  </div>
                   <div className="p-6 bg-green-50 rounded-3xl border border-green-100">
                     <h3 className="text-sm font-bold text-green-800 mb-2 flex items-center gap-2">
                       <Globe className="w-4 h-4" />
@@ -1820,16 +1767,15 @@ function AppContent() {
                               whileHover={{ scale: selectedIndex === index ? 1.01 : 1.005 }}
                               exit={{ 
                                 opacity: 0, 
-                                x: lastAction?.id === job.id ? (lastAction.status === 'approved' ? 500 : lastAction.status === 'rejected' ? -500 : 0) : 0,
-                                y: lastAction?.id === job.id && lastAction.status === 'applied' ? -200 : 0,
+                                x: lastAction?.id === job.id ? 800 : 0,
                                 scale: 0.9,
-                                transition: { duration: 0.5, ease: [0.32, 0.72, 0, 1] } 
+                                transition: { duration: 0.8, ease: [0.32, 0.72, 0, 1] } 
                               }}
                               transition={{ 
-                                layout: { duration: 0.3 },
-                                opacity: { duration: 0.2 },
-                                y: { duration: 0.2 },
-                                scale: { duration: 0.2 }
+                                layout: { duration: 0.6 },
+                                opacity: { duration: 0.4 },
+                                y: { duration: 0.4 },
+                                scale: { duration: 0.4 }
                               }}
                               onClick={() => setSelectedIndex(index)}
                               className={`pastel-card p-8 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-8 items-start ${
@@ -1919,26 +1865,26 @@ function AppContent() {
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'approved')}
                                       disabled={updatingJobId === job.id}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#2D3A29]/10 hover:border-[#2D3A29] ${job.status === 'approved' ? 'bg-[#2D3A29] text-white border-[#2D3A29]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-green-50 hover:border-green-500 ${job.status === 'approved' ? 'bg-green-500 text-white border-green-500' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Approve"
                                     >
-                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <ThumbsUp size={20} />}
+                                      <ThumbsUp size={20} />
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'rejected')}
                                       disabled={updatingJobId === job.id}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#C3A0A0]/10 hover:border-[#C3A0A0] ${job.status === 'rejected' ? 'bg-[#C3A0A0] text-white border-[#C3A0A0]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-red-50 hover:border-red-500 ${job.status === 'rejected' ? 'bg-red-500 text-white border-red-500' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Reject"
                                     >
-                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <ThumbsDown size={20} />}
+                                      <ThumbsDown size={20} />
                                     </button>
                                     <button 
                                       onClick={() => handleUpdateJobStatus(job.id, 'applied')}
                                       disabled={updatingJobId === job.id}
-                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-[#93C5FD]/10 hover:border-[#93C5FD] ${job.status === 'applied' ? 'bg-[#93C5FD] text-white border-[#93C5FD]' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                      className={`p-2.5 rounded-full border border-[#E8E4DE] transition-all hover:bg-blue-50 hover:border-blue-500 ${job.status === 'applied' ? 'bg-blue-500 text-white border-blue-500' : 'text-[#4A443F]/40'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                       title="Mark as Applied"
                                     >
-                                      {updatingJobId === job.id ? <Loader2 size={20} className="animate-spin" /> : <PenLine size={20} />}
+                                      <PenLine size={20} />
                                     </button>
                                   </div>
                                 </div>
