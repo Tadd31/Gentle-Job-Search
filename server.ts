@@ -264,7 +264,7 @@ async function startServer() {
 
       // Replace placeholders in popup.js
       const popupJs = popupJsTemplate
-        .replace('__API_BASE_URL__', appUrl)
+        .replace('__API_BASE_URL__', frontendUrl)
         .replace('__FRONTEND_URL__', frontendUrl);
 
       zip.file('manifest.json', manifest);

@@ -959,9 +959,15 @@ function AppContent() {
 
             setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
             
+            const keywordsText = profile.keywords?.trim() || 'No specific keywords (show all relevant jobs)';
+            const locationText = profile.location?.trim() || 'Any location';
+            const minSalaryText = profile.min_salary ? `£${profile.min_salary.toLocaleString()}` : 'No minimum salary';
+
             const modeInstructions = profile.search_mode === 'strict' 
-              ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
-              : `DISCOVERY MODE: Use keywords (${profile.keywords}) AND the user's LinkedIn profile (${profile.linkedin_url}) to semantically discover relevant roles.`;
+              ? (profile.keywords?.trim() 
+                  ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
+                  : `STRICT MODE: No keywords specified. Include all jobs found in the text.`)
+              : `DISCOVERY MODE: Use keywords (${profile.keywords || 'None'}) AND the user's LinkedIn profile (${profile.linkedin_url || 'Not provided'}) to semantically discover relevant roles.`;
 
             const approvedContext = jobs.filter(j => j.status === 'approved').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
             const rejectedContext = jobs.filter(j => j.status === 'rejected').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
@@ -970,9 +976,9 @@ function AppContent() {
               Extract job listings from the following text. 
               
               USER CONTEXT:
-              - Keywords: ${profile.keywords}
-              - Location: ${profile.location}
-              - Minimum Salary: £${profile.min_salary?.toLocaleString() || '30,000'}
+              - Keywords: ${keywordsText}
+              - Location: ${locationText}
+              - Minimum Salary: ${minSalaryText}
               
               LEARNING FROM HISTORY:
               The user has APPROVED these types of jobs:
@@ -986,8 +992,8 @@ function AppContent() {
               
               CRITICAL FILTERING CRITERIA:
               1. Be thorough but precise. 
-              2. Use "OR" logic for keywords.
-              3. LOCATION PRECISION: The user is looking for jobs in ${profile.location}. Be flexible with sub-regions (e.g., if they want "London", "Central London" is fine).
+              2. KEYWORD MATCHING: ${profile.keywords?.trim() ? 'Only include jobs matching the keywords.' : 'Include all jobs found.'}
+              3. LOCATION PRECISION: ${profile.location?.trim() ? `The user is looking for jobs in ${profile.location}. Be flexible with sub-regions.` : 'No location filter specified.'}
               4. SALARY EXTRACTION: Look for salary information.
               5. SENIORITY EXTRACTION: Look for seniority level.
               6. MATCHING: Even if a job title doesn't exactly match a keyword, if it's a similar role (e.g., "Application Developer" for "Software Engineer"), include it.
@@ -1255,6 +1261,16 @@ function AppContent() {
                     </motion.span>
                   )}
                 </div>
+                {!isCrawling && user && (
+                  <button
+                    onClick={handleResetData}
+                    disabled={isResetting}
+                    className="ml-4 px-3 py-1.5 rounded-full border border-red-100 bg-red-50/30 text-[9px] font-bold uppercase tracking-widest text-red-400 hover:bg-red-50 hover:text-red-500 transition-all duration-300 flex items-center gap-1.5 group"
+                  >
+                    <Trash2 size={10} className="group-hover:scale-110 transition-transform" /> 
+                    {isResetting ? 'Clearing...' : 'Clear All Jobs'}
+                  </button>
+                )}
               </div>
             </div>
             
@@ -2118,7 +2134,7 @@ function AppContent() {
                                     <> {lastCrawlReport.sourcesUnreachable.length} were unreachable (<span className="italic">{lastCrawlReport.sourcesUnreachable.join(', ')}</span>).</>
                                   )}
                                   {lastCrawlReport.sourcesWithNoMatches > 0 && (
-                                    <> {lastCrawlReport.sourcesWithNoMatches} returned content but had no keyword matches.</>
+                                    <> {lastCrawlReport.sourcesWithNoMatches} {lastCrawlReport.sourcesWithNoMatches === 1 ? 'source' : 'sources'} returned content but had no new jobs matching your criteria.</>
                                   )}
                                   {lastCrawlReport.sourcesSkipped > 0 && (
                                     <> {lastCrawlReport.sourcesSkipped} {lastCrawlReport.sourcesSkipped === 1 ? 'was' : 'were'} skipped (checked recently).</>
