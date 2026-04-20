@@ -37,7 +37,8 @@ import {
   LogIn,
   User as UserIcon,
   Loader2,
-  Puzzle
+  Puzzle,
+  Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from '@google/genai';
@@ -62,6 +63,7 @@ import {
   where, 
   orderBy, 
   limit, 
+  getDocFromServer,
   Timestamp,
   writeBatch,
   handleFirestoreError,
@@ -150,6 +152,8 @@ interface Source {
   is_broken?: boolean;
   last_error?: string;
   last_crawled?: any; // Firestore Timestamp or ISO string
+  last_checked?: any; // Firestore Timestamp or ISO string
+  created_at?: any; // Firestore Timestamp or ISO string
   jobs_found?: number;
 }
 
@@ -219,6 +223,30 @@ function AppContent() {
   } | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
+  const [dbConnectionStatus, setDbConnectionStatus] = useState<'checking' | 'connected' | 'error'>('checking');
+
+  const checkDbConnection = async () => {
+    setDbConnectionStatus('checking');
+    try {
+      const testRef = doc(db, 'test', 'connection');
+      await getDocFromServer(testRef);
+      setDbConnectionStatus('connected');
+    } catch (err: any) {
+      console.error('DB Connection check failed:', err);
+      // If it's just a "not found" error, it still means we reached the server
+      if (err.code === 'not-found' || !err.message.includes('offline')) {
+        setDbConnectionStatus('connected');
+      } else {
+        setDbConnectionStatus('error');
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthReady) {
+      checkDbConnection();
+    }
+  }, [isAuthReady]);
 
   const handleLogin = async () => {
     if (isLoggingIn) return;
@@ -299,14 +327,12 @@ function AppContent() {
     const jobsRef = collection(db, 'users', userId, 'jobs');
     let jobsQuery = query(jobsRef);
     
-    if (activeTab !== 'settings' && activeTab !== 'sources') {
+    if (activeTab !== 'settings' && activeTab !== 'sources' && activeTab !== 'extension') {
       jobsQuery = query(jobsRef, where('status', '==', activeTab));
     }
 
     const unsubscribeJobs = onSnapshot(jobsQuery, (snapshot) => {
       const jobsData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Job));
-      console.log(`[Firestore] Snapshot for tab "${activeTab}":`, jobsData.length, 'jobs');
-      console.log(`[Firestore] Job IDs in snapshot:`, jobsData.map(j => j.id));
       setJobs(jobsData);
     }, (error) => handleFirestoreError(error, OperationType.GET, `users/${userId}/jobs`));
 
@@ -372,7 +398,6 @@ function AppContent() {
         signal: controller.signal
       });
       clearTimeout(id);
-      console.log(`Response from ${url}:`, response.status);
       return response;
     } catch (error) {
       clearTimeout(id);
@@ -442,7 +467,24 @@ function AppContent() {
           const snapshot = await getDocs(jobsRef);
           const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
           await Promise.all(deletePromises);
-          showAlert('Success', 'Job data has been reset.');
+          
+          // Also reset source crawl timestamps so user can re-test immediately
+          const sourcesRef = collection(db, 'users', user.uid, 'sources');
+          const sourcesSnapshot = await getDocs(sourcesRef);
+          const updatePromises = sourcesSnapshot.docs.map(d => updateDoc(d.ref, {
+            last_crawled: null,
+            jobs_found: 0,
+            is_broken: false,
+            last_error: null
+          }));
+          await Promise.all(updatePromises);
+          
+          // Reset local state
+          setJobs([]);
+          setSelectedIndex(-1);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          
+          showAlert('Success', 'Job data and crawl history have been reset.');
         } catch (err) {
           console.error(err);
           handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/jobs`);
@@ -460,6 +502,7 @@ function AppContent() {
       const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
       let text = '';
       let error = '';
+      let jobsCount = 0;
       
       if (!contentRes.ok) {
         try {
@@ -468,14 +511,31 @@ function AppContent() {
         } catch (e) {
           error = contentRes.statusText;
         }
+        console.error(`Test fetch failed for ${source.url}: ${contentRes.status}`, error);
       } else {
         const data = await contentRes.json();
         text = data.text;
+        jobsCount = data.jobs?.length || 0;
+        
+        if (data.detectedBoard) {
+          showAlert('API Detected', `This site uses the ${data.detectedBoard} API. Scouting will be extra reliable!`);
+        }
+        
+        console.log(`Test fetch success for ${source.url}:`, { textLength: text?.length || 0, jobsCount });
+      }
+
+      if (!text && jobsCount === 0) {
+        const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+        await updateDoc(sourceRef, { 
+          is_broken: true, 
+          last_error: error || 'No job content found (page might be empty or blocked)',
+          last_crawled: Timestamp.now()
+        });
       }
 
       setDebugModal({
         isOpen: true,
-        text: text || `ERROR: ${error || 'No text content found on this page.'}`,
+        text: text || `ERROR: ${error || 'No job content found on this page.'}${jobsCount > 0 ? ` (But found ${jobsCount} structured jobs)` : ''}`,
         sourceName: source.name || source.url
       });
     } catch (err: any) {
@@ -502,6 +562,19 @@ function AppContent() {
       console.error(err);
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${jobId}`);
     }
+  };
+
+  const [faviconErrors, setFaviconErrors] = useState<Record<string, boolean>>({});
+
+  const isScoutedInLast24h = (lastCrawled: any) => {
+    if (!lastCrawled) return false;
+    const date = lastCrawled instanceof Timestamp ? lastCrawled.toDate() : new Date(lastCrawled);
+    const now = new Date();
+    return (now.getTime() - date.getTime()) < 24 * 60 * 60 * 1000;
+  };
+
+  const handleFaviconError = (url: string) => {
+    setFaviconErrors(prev => ({ ...prev, [url]: true }));
   };
 
   const handleBulkSourceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -590,7 +663,12 @@ function AppContent() {
 
             try {
               const sourcesRef = collection(db, 'users', user.uid, 'sources');
-              await setDoc(doc(sourcesRef), { url, name, jobs_found: 0 });
+              await setDoc(doc(sourcesRef), { 
+                url, 
+                name, 
+                jobs_found: 0,
+                created_at: Timestamp.now()
+              });
             } catch (err) {
               console.error('Failed to import source:', url, err);
             }
@@ -608,15 +686,26 @@ function AppContent() {
     });
   };
 
-  const handleAddSource = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newSourceUrl || !user) return showAlert('Login Required', 'Please log in to add sources.');
+  const handleAddSource = async (e?: React.FormEvent, manualUrl?: string, manualName?: string) => {
+    if (e) e.preventDefault();
+    
+    const url = manualUrl || newSourceUrl;
+    const name = manualName || newSourceName;
+
+    if (!url || !user) return showAlert('Login Required', 'Please log in to add sources.');
     setIsAddingSource(true);
     try {
       const sourcesRef = collection(db, 'users', user.uid, 'sources');
-      await setDoc(doc(sourcesRef), { url: newSourceUrl, name: newSourceName || newSourceUrl, jobs_found: 0 });
-      setNewSourceUrl('');
-      setNewSourceName('');
+      await setDoc(doc(sourcesRef), { 
+        url: url, 
+        name: name || url, 
+        jobs_found: 0,
+        created_at: Timestamp.now()
+      });
+      if (!manualUrl) {
+        setNewSourceUrl('');
+        setNewSourceName('');
+      }
     } catch (err) {
       console.error(err);
       handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/sources`);
@@ -684,7 +773,6 @@ function AppContent() {
 
   const handleUpdateJobStatus = async (id: string, status: Job['status']) => {
     if (!user) return;
-    console.log(`[Action] Starting update for job ${id} to status: ${status}`);
     setUpdatingJobId(id);
     setLastAction({ id, status });
     
@@ -705,9 +793,7 @@ function AppContent() {
       }
 
       const jobRef = doc(db, 'users', user.uid, 'jobs', id);
-      console.log(`[Firestore] Updating document: users/${user.uid}/jobs/${id}`);
       await updateDoc(jobRef, { status });
-      console.log(`[Firestore] Update successful for job ${id}`);
     } catch (err) {
       console.error('[Firestore] Error updating job status:', err);
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}/jobs/${id}`);
@@ -761,57 +847,6 @@ function AppContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [jobs, selectedIndex, modal, isCrawling]);
-
-  const fetchGreenhouseJobs = async (boardId: string) => {
-    if (!user) return;
-    setIsCrawling(true);
-    setCrawlProgress(`Fetching Greenhouse jobs for ${boardId}...`);
-    try {
-      const res = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || `Failed to fetch Greenhouse jobs: ${res.statusText}`);
-      }
-      const data = await res.json();
-      
-      if (data.jobs && Array.isArray(data.jobs)) {
-        const existingUrls = new Set(jobs.map(j => j.link));
-        const newJobs = data.jobs.filter((j: any) => !existingUrls.has(j.absolute_url));
-        
-        if (newJobs.length > 0) {
-          const jobsRef = collection(db, 'users', user.uid, 'jobs');
-          const savePromises = newJobs.map((j: any) => {
-            const jobDoc = doc(jobsRef);
-            // Extract some metadata if available
-            const brand = j.metadata?.find((m: any) => m.name === 'Brand')?.value;
-            const capability = j.metadata?.find((m: any) => m.name === 'Capability')?.value;
-            
-            return setDoc(jobDoc, {
-              id: `gh-${j.id}`,
-              title: j.title,
-              company: j.company_name || (brand ? `${boardId} (${brand})` : boardId),
-              location: j.location?.name || 'Unknown',
-              link: j.absolute_url,
-              description: `${capability ? `Capability: ${capability}. ` : ''}Found via Greenhouse API for board: ${boardId}`,
-              status: 'new',
-              source_url: `https://boards.greenhouse.io/${boardId}`,
-              found_at: Timestamp.now()
-            });
-          });
-          await Promise.all(savePromises);
-          showAlert('Success', `Found and saved ${newJobs.length} new jobs from ${boardId} Greenhouse board.`);
-        } else {
-          showAlert('No New Jobs', `No new jobs found on the ${boardId} Greenhouse board.`);
-        }
-      }
-    } catch (err: any) {
-      console.error(err);
-      showAlert('Error', err.message);
-    } finally {
-      setIsCrawling(false);
-      setCrawlProgress('');
-    }
-  };
 
   const handleManualCrawl = async () => {
     if (isCrawling || !user) return;
@@ -881,47 +916,109 @@ function AppContent() {
       );
       
       for (const source of sortedSources) {
+        sourcesChecked++;
+        const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+        await updateDoc(sourceRef, { last_checked: Timestamp.now() });
+
         try {
-          // Incremental Crawling Check: Skip if crawled in last X days
+          // Incremental Crawling Check: Skip if crawled in last 24 hours
           if (source.last_crawled) {
-            // Crawl interval removed by user request
-          }
-
-          sourcesChecked++;
-          let extractedJobs: any[] = [];
-          let text = '';
-
-          // SMART CHECK: Is this a Greenhouse Board?
-          const ghMatch = source.url.match(/boards\.greenhouse\.io\/([^/?#]+)/);
-          if (ghMatch) {
-            const boardId = ghMatch[1];
-            setCrawlProgress(`Fetching Greenhouse API for ${boardId}...`);
-            try {
-              const ghRes = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
-              if (ghRes.ok) {
-                const ghData = await ghRes.json();
-                if (ghData.jobs && Array.isArray(ghData.jobs)) {
-                  extractedJobs = ghData.jobs.map((j: any) => {
-                    const brand = j.metadata?.find((m: any) => m.name === 'Brand')?.value;
-                    const capability = j.metadata?.find((m: any) => m.name === 'Capability')?.value;
-                    return {
-                      id: `gh-${j.id}`,
-                      title: j.title,
-                      company: j.company_name || (brand ? `${source.name} (${brand})` : source.name),
-                      location: j.location?.name || 'Unknown',
-                      link: j.absolute_url,
-                      description: `${capability ? `Capability: ${capability}. ` : ''}Found via Greenhouse API.`,
-                      salary: 'Unknown',
-                      seniority: 'Unknown'
-                    };
-                  });
-                }
-              }
-            } catch (e) {
-              console.error(`Greenhouse API fallback failed for ${boardId}`, e);
+            const now = new Date();
+            const lastCrawledDate = source.last_crawled instanceof Timestamp 
+              ? source.last_crawled.toDate() 
+              : new Date(source.last_crawled);
+            const diffInHours = (now.getTime() - lastCrawledDate.getTime()) / (1000 * 60 * 60);
+            
+            if (diffInHours < 24) {
+              sourcesSkipped++;
+              continue;
             }
           }
 
+          let extractedJobs: any[] = [];
+          let text = '';
+
+          // 1. TRY SPECIALIZED BOARD APIs FIRST
+          const fetchSpecializedBoardJobs = async () => {
+            // Greenhouse Detection
+            const ghMatch = source.url.match(/boards\.greenhouse\.io\/([^/?#]+)/);
+            const isVML = source.url.toLowerCase().includes('vml') || (source.name || '').toLowerCase().includes('vml');
+            if (ghMatch || isVML) {
+              const boardId = ghMatch ? ghMatch[1] : 'vml';
+              setCrawlProgress(`Fetching Greenhouse API for ${boardId}...`);
+              try {
+                const res = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.jobs) return data.jobs.map((j: any) => ({
+                    id: `gh-${j.id}`,
+                    title: j.title,
+                    company: j.company_name || (j.metadata?.find((m: any) => m.name === 'Brand')?.value ? `${source.name} (${j.metadata.find((m: any) => m.name === 'Brand').value})` : source.name),
+                    location: j.location?.name || 'Unknown',
+                    link: j.absolute_url,
+                    description: `Found via Greenhouse API. ${j.metadata?.find((m: any) => m.name === 'Capability')?.value || ''}`,
+                    salary: 'Unknown',
+                    seniority: 'Unknown'
+                  }));
+                }
+              } catch (e) {}
+            }
+
+            // Publicis Detection
+            if (source.url.includes('careers.publicisgroupe.com')) {
+              setCrawlProgress(`Fetching Publicis Groupe Unified API...`);
+              try {
+                const res = await fetch(`/api/publicis-jobs?limit=4000`);
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.jobs) return data.jobs.map((j: any) => {
+                    const jd = j.data;
+                    const agencyTag = jd.tags8?.[0] || jd.tags9?.[0] || jd.tags2?.[0];
+                    return {
+                      id: `pub-${jd.req_id}`,
+                      title: jd.title,
+                      company: agencyTag ? agencyTag.split(' - ')[0] : 'Publicis Groupe',
+                      location: jd.full_location || jd.location_name || 'Global',
+                      link: jd.apply_url || jd.canonical_url,
+                      description: `Found via Publicis Unified Portal. ${jd.employment_type || ''}`,
+                      salary: 'Unknown',
+                      seniority: jd.tags5?.[0] || 'Unknown'
+                    };
+                  });
+                }
+              } catch (e) {}
+            }
+
+            // SmartRecruiters Detection
+            const srMatch = source.url.match(/(?:careers|jobs)\.smartrecruiters\.com\/([^/?#]+)/);
+            const isSRReferral = !source.url.includes('droga5.com') && source.url.includes('droga5');
+            const finalSrMatch = srMatch || (isSRReferral ? [null, 'droga5'] : null);
+            if (finalSrMatch) {
+              const companyId = finalSrMatch[1];
+              setCrawlProgress(`Fetching SmartRecruiters API for ${companyId}...`);
+              try {
+                const res = await fetch(`/api/smartrecruiters-jobs?company=${companyId}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.content) return data.content.map((j: any) => ({
+                    id: `sr-${j.id}`,
+                    title: j.name,
+                    company: source.name || 'Droga5',
+                    location: j.location?.city || j.location?.region || 'Unknown',
+                    link: `https://jobs.smartrecruiters.com/${companyId}/${j.id}`,
+                    description: `Found via SmartRecruiters API. ${j.typeOfEmployment?.label || ''}`,
+                    salary: 'Unknown',
+                    seniority: 'Unknown'
+                  }));
+                }
+              } catch (e) {}
+            }
+            return [];
+          };
+
+          extractedJobs = await fetchSpecializedBoardJobs();
+
+          // 2. FALLBACK TO CONTENT CRAWLING + AI EXTRACTION
           if (extractedJobs.length === 0) {
             setCrawlProgress(`Fetching content from ${source.name || source.url}...`);
             const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
@@ -931,24 +1028,45 @@ function AppContent() {
               try {
                 const errJson = await contentRes.json();
                 if (errJson.error) errorDetail = errJson.error;
-                if (errorDetail.includes('Sync VML')) {
-                  showAlert('VML Access Denied', 'VML is blocking direct access. Please use the "Sync VML" button in the header to fetch jobs directly from their Greenhouse boards.');
-                }
               } catch (e) {}
 
               sourcesUnreachable.push(source.name || source.url);
               const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-              await updateDoc(sourceRef, { is_broken: true, last_error: errorDetail || 'Fetch failed' });
+              await updateDoc(sourceRef, { 
+                is_broken: true, 
+                last_error: errorDetail || 'Fetch failed',
+                last_crawled: Timestamp.now()
+              });
               continue;
             }
             
             const data = await contentRes.json();
             text = data.text;
+            
+            if (data.jobs && Array.isArray(data.jobs)) {
+              // If we have structured jobs, we can use them directly!
+              // But we should still filter them by the user's keywords if in strict mode.
+              const keywords = profile.keywords?.toLowerCase().split(',').map(k => k.trim()).filter(Boolean) || [];
+              if (profile.search_mode === 'strict' && keywords.length > 0) {
+                extractedJobs = data.jobs.filter((j: any) => {
+                  const title = j.title.toLowerCase();
+                  const desc = j.description.toLowerCase();
+                  return keywords.some(k => title.includes(k) || desc.includes(k));
+                });
+              } else {
+                extractedJobs = data.jobs;
+              }
+            }
 
-            if (!text || text.length < 200) {
+            if (extractedJobs.length === 0 && (!text || text.length < 200)) {
               sourcesUnreachable.push(source.name || source.url);
-              // Only mark as broken if contentRes.ok was false (handled above)
-              // For low content, we just skip this source for now
+              // Mark as broken if content is sparse
+              const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
+              await updateDoc(sourceRef, { 
+                is_broken: true,
+                last_error: 'No job content found (page might be empty or blocked)',
+                last_crawled: Timestamp.now() 
+              });
               continue;
             }
 
@@ -957,80 +1075,82 @@ function AppContent() {
               await updateDoc(sourceRef, { is_broken: false, last_error: null });
             }
 
-            setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
-            
-            const keywordsText = profile.keywords?.trim() || 'No specific keywords (show all relevant jobs)';
-            const locationText = profile.location?.trim() || 'Any location';
-            const minSalaryText = profile.min_salary ? `£${profile.min_salary.toLocaleString()}` : 'No minimum salary';
-
-            const modeInstructions = profile.search_mode === 'strict' 
-              ? (profile.keywords?.trim() 
-                  ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
-                  : `STRICT MODE: No keywords specified. Include all jobs found in the text.`)
-              : `DISCOVERY MODE: Use keywords (${profile.keywords || 'None'}) AND the user's LinkedIn profile (${profile.linkedin_url || 'Not provided'}) to semantically discover relevant roles.`;
-
-            const approvedContext = jobs.filter(j => j.status === 'approved').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
-            const rejectedContext = jobs.filter(j => j.status === 'rejected').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
-
-            const prompt = `
-              Extract job listings from the following text. 
+            if (extractedJobs.length === 0) {
+              setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
               
-              USER CONTEXT:
-              - Keywords: ${keywordsText}
-              - Location: ${locationText}
-              - Minimum Salary: ${minSalaryText}
-              
-              LEARNING FROM HISTORY:
-              The user has APPROVED these types of jobs:
-              ${approvedContext || 'None yet'}
-              
-              The user has REJECTED these types of jobs:
-              ${rejectedContext || 'None yet'}
-              
-              SEARCH MODE:
-              ${modeInstructions}
-              
-              CRITICAL FILTERING CRITERIA:
-              1. Be thorough but precise. 
-              2. KEYWORD MATCHING: ${profile.keywords?.trim() ? 'Only include jobs matching the keywords.' : 'Include all jobs found.'}
-              3. LOCATION PRECISION: ${profile.location?.trim() ? `The user is looking for jobs in ${profile.location}. Be flexible with sub-regions.` : 'No location filter specified.'}
-              4. SALARY EXTRACTION: Look for salary information.
-              5. SENIORITY EXTRACTION: Look for seniority level.
-              6. MATCHING: Even if a job title doesn't exactly match a keyword, if it's a similar role (e.g., "Application Developer" for "Software Engineer"), include it.
-              7. NO MATCHES: If no jobs match the criteria, return an empty array [].
+              const keywordsText = profile.keywords?.trim() || 'No specific keywords (show all relevant jobs)';
+              const locationText = profile.location?.trim() || 'Any location';
+              const minSalaryText = profile.min_salary ? `£${profile.min_salary.toLocaleString()}` : 'No minimum salary';
 
-              LINK EXTRACTION RULES:
-              - Find the MOST DIRECT link to the specific job description page.
-              - If the link is relative, make it absolute using the source URL: ${source.url}
+              const modeInstructions = profile.search_mode === 'strict' 
+                ? (profile.keywords?.trim() 
+                    ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
+                    : `STRICT MODE: No keywords specified. Include all jobs found in the text.`)
+                : `DISCOVERY MODE: Use keywords (${profile.keywords || 'None'}) AND the user's LinkedIn profile (${profile.linkedin_url || 'Not provided'}) to semantically discover relevant roles.`;
 
-              Text to analyze:
-              ${text}
+              const approvedContext = jobs.filter(j => j.status === 'approved').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
+              const rejectedContext = jobs.filter(j => j.status === 'rejected').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
 
-              Return a JSON array of objects with these fields:
-              - id (a unique string based on title and company)
-              - title
-              - company
-              - location
-              - link (absolute URL)
-              - description (short summary)
-              - salary (e.g., "£40,000 - £50,000" or "Unknown")
-              - seniority (e.g., "Senior")
-            `;
+              const prompt = `
+                Extract job listings from the following text. 
+                
+                USER CONTEXT:
+                - Keywords: ${keywordsText}
+                - Location: ${locationText}
+                - Minimum Salary: ${minSalaryText}
+                
+                LEARNING FROM HISTORY:
+                The user has APPROVED these types of jobs:
+                ${approvedContext || 'None yet'}
+                
+                The user has REJECTED these types of jobs:
+                ${rejectedContext || 'None yet'}
+                
+                SEARCH MODE:
+                ${modeInstructions}
+                
+                CRITICAL FILTERING CRITERIA:
+                1. Be thorough but precise. 
+                2. KEYWORD MATCHING: ${profile.keywords?.trim() ? 'Only include jobs matching the keywords.' : 'Include all jobs found.'}
+                3. LOCATION PRECISION: ${profile.location?.trim() ? `The user is looking for jobs in ${profile.location}. Be flexible with sub-regions.` : 'No location filter specified.'}
+                4. SALARY EXTRACTION: Look for salary information.
+                5. SENIORITY EXTRACTION: Look for seniority level.
+                6. MATCHING: Even if a job title doesn't exactly match a keyword, if it's a similar role (e.g., "Application Developer" for "Software Engineer"), include it.
+                7. NO MATCHES: If no jobs match the criteria, return an empty array [].
 
-            const result = await generateWithRetry(prompt);
-            const resultText = result.text || '[]';
-            
-            // Robust JSON extraction
-            try {
-              const jsonMatch = resultText.match(/\[[\s\S]*\]/);
-              if (jsonMatch) {
-                extractedJobs = JSON.parse(jsonMatch[0]);
-              } else {
-                extractedJobs = JSON.parse(resultText);
+                LINK EXTRACTION RULES:
+                - Find the MOST DIRECT link to the specific job description page.
+                - If the link is relative, make it absolute using the source URL: ${source.url}
+
+                Text to analyze:
+                ${text}
+
+                Return a JSON array of objects with these fields:
+                - id (a unique string based on title and company)
+                - title
+                - company
+                - location
+                - link (absolute URL)
+                - description (short summary)
+                - salary (e.g., "£40,000 - £50,000" or "Unknown")
+                - seniority (e.g., "Senior")
+              `;
+
+              const result = await generateWithRetry(prompt);
+              const resultText = result.text || '[]';
+              
+              // Robust JSON extraction
+              try {
+                const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+                if (jsonMatch) {
+                  extractedJobs = JSON.parse(jsonMatch[0]);
+                } else {
+                  extractedJobs = JSON.parse(resultText);
+                }
+              } catch (e) {
+                console.error('Failed to parse Gemini JSON:', resultText);
+                extractedJobs = [];
               }
-            } catch (e) {
-              console.error('Failed to parse Gemini JSON:', resultText);
-              extractedJobs = [];
             }
           }
           
@@ -1067,7 +1187,11 @@ function AppContent() {
           console.error(`Error crawling ${source.name || source.url}:`, sourceErr);
           sourcesUnreachable.push(source.name || source.url);
           const sourceRef = doc(db, 'users', user.uid, 'sources', source.id);
-          await updateDoc(sourceRef, { is_broken: true, last_error: sourceErr.message || 'Crawl failed' });
+          await updateDoc(sourceRef, { 
+            is_broken: true, 
+            last_error: sourceErr.message || 'Crawl failed',
+            last_crawled: Timestamp.now()
+          });
         }
       }
       
@@ -1236,8 +1360,8 @@ function AppContent() {
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 lg:ml-72 min-h-screen flex flex-col w-full">
-          <header className="h-20 lg:h-24 bg-white/60 backdrop-blur-xl border-b border-[#E8E4DE] flex items-center justify-between px-4 lg:px-12 sticky top-0 z-50">
+        <main className="flex-1 lg:ml-72 min-h-screen flex flex-col w-full relative">
+          <header className="h-20 lg:h-24 bg-white/80 backdrop-blur-xl border-b border-[#E8E4DE] flex items-center justify-between px-4 lg:px-12 fixed top-0 left-0 right-0 lg:left-72 z-40">
             <div className="flex items-center gap-4 lg:gap-6">
               <button 
                 onClick={() => setIsSidebarOpen(true)}
@@ -1255,7 +1379,21 @@ function AppContent() {
                     <motion.span 
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="text-[8px] lg:text-[9px] font-mono opacity-60 text-[#2D3A29] truncate max-w-[120px] lg:max-w-[200px]"
+                      className={`text-[8px] lg:text-[9px] font-mono opacity-60 text-[#2D3A29] truncate max-w-[120px] lg:max-w-[200px] ${crawlProgress.includes('complete') ? 'cursor-pointer hover:text-[#93C5FD] underline' : ''}`}
+                      onClick={async () => {
+                        if (crawlProgress.includes('complete') && user) {
+                          const sourcesRef = collection(db, 'users', user.uid, 'sources');
+                          const sourcesSnapshot = await getDocs(sourcesRef);
+                          const updatePromises = sourcesSnapshot.docs.map(d => updateDoc(d.ref, {
+                            last_crawled: null,
+                            jobs_found: 0,
+                            is_broken: false,
+                            last_error: null
+                          }));
+                          await Promise.all(updatePromises);
+                          showAlert('Ready', 'Crawl history cleared. You can scout again immediately.');
+                        }
+                      }}
                     >
                       {crawlProgress}
                     </motion.span>
@@ -1315,6 +1453,8 @@ function AppContent() {
                 </button>
               )}
               
+              {/* Sync VML button removed as requested */}
+              
               <button 
                 onClick={handleManualCrawl}
                 disabled={isCrawling || !user}
@@ -1337,7 +1477,7 @@ function AppContent() {
           </header>
 
           {/* Content Area */}
-          <div className="flex-1 overflow-y-auto p-4 lg:p-12">
+          <div className="flex-1 p-4 lg:p-12 pt-24 lg:pt-36">
           <AnimatePresence mode="wait">
             {activeTab === 'extension' ? (
               <motion.div 
@@ -1563,6 +1703,74 @@ function AppContent() {
                     </button>
                   </form>
                 </div>
+
+                {/* Connection Status Indicator */}
+                <div className="mt-8 pastel-card p-8 border-t-4 border-[#93C5FD]">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h3 className="font-serif italic text-2xl text-[#2D3A29]">Connection Status</h3>
+                      <p className="text-[10px] opacity-40">Verify your app's link to Firebase.</p>
+                    </div>
+                    <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${
+                      dbConnectionStatus === 'connected' ? 'bg-green-100 text-green-600' :
+                      dbConnectionStatus === 'error' ? 'bg-red-100 text-red-600' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${
+                        dbConnectionStatus === 'connected' ? 'bg-green-500 animate-pulse' :
+                        dbConnectionStatus === 'error' ? 'bg-red-500' :
+                        'bg-gray-500'
+                      }`} />
+                      {dbConnectionStatus === 'connected' ? 'Connected' : 
+                       dbConnectionStatus === 'error' ? 'Offline' : 'Checking...'}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="p-4 bg-[#F7F3EF] rounded-2xl space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Project ID</span>
+                        <span className="text-xs font-mono text-[#2D3A29]">gen-lang-client-0402391668</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Database ID</span>
+                        <span className="text-xs font-mono text-[#2D3A29]">ai-studio-d6cd8c71-688c-4179-8f94-be58ac11ea83</span>
+                      </div>
+                      <div className="pt-3 border-t border-[#E8E4DE]">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">Your User ID (UID)</span>
+                          {user && (
+                            <button 
+                              onClick={() => {
+                                navigator.clipboard.writeText(user.uid);
+                                confetti({ particleCount: 30, spread: 50, origin: { y: 0.8 }, colors: ['#93C5FD'] });
+                              }}
+                              className="text-[9px] text-[#93C5FD] hover:underline font-bold uppercase"
+                            >
+                              Copy UID
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-[10px] font-mono text-[#2D3A29] break-all bg-white/50 p-2 rounded-lg border border-[#E8E4DE]">
+                          {user ? user.uid : 'Not logged in'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] opacity-40 italic leading-relaxed">
+                      If you don't see data in the Firebase Console, search for your <strong>User ID</strong> in the <strong>users</strong> collection. 
+                      Firestore collections only appear in the console once they contain at least one document.
+                    </p>
+
+                    <button 
+                      onClick={checkDbConnection}
+                      className="w-full py-2 text-[10px] font-bold uppercase tracking-widest text-[#4A443F]/60 hover:text-[#4A443F] transition-colors flex items-center justify-center gap-2"
+                    >
+                      <RefreshCw size={12} className={dbConnectionStatus === 'checking' ? 'animate-spin' : ''} />
+                      Refresh Connection
+                    </button>
+                  </div>
+                </div>
               </motion.div>
             ) : activeTab === 'sources' ? (
               <motion.div 
@@ -1672,13 +1880,11 @@ function AppContent() {
                           const input = document.getElementById('gh-board-id-sources') as HTMLInputElement;
                           if (input && input.value) {
                             const boardId = input.value.trim();
-                            handleAddSource({
-                              preventDefault: () => {},
-                              target: {
-                                name: { value: `Greenhouse: ${boardId}` },
-                                url: { value: `https://boards.greenhouse.io/${boardId}` }
-                              }
-                            } as any);
+                            handleAddSource(
+                              undefined,
+                              `https://boards.greenhouse.io/${boardId}`,
+                              `Greenhouse: ${boardId}`
+                            );
                             input.value = '';
                           }
                         }}
@@ -1728,7 +1934,7 @@ function AppContent() {
                     <div className="w-px h-6 bg-[#E8E4DE]" />
                     <div className="text-center">
                       <p className="text-[10px] uppercase tracking-widest font-bold opacity-30 mb-1">Broken</p>
-                      <p className="text-xl font-serif italic text-red-400">{sources.filter(s => s.is_broken).length}</p>
+                      <p className="text-xl font-serif italic text-red-400">{sources.filter(s => s.is_broken && !isScoutedInLast24h(s.last_crawled)).length}</p>
                     </div>
                     <div className="w-px h-6 bg-[#E8E4DE]" />
                     <div className="text-center">
@@ -1775,43 +1981,76 @@ function AppContent() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {[...sources].sort((a, b) => {
                     if (sourceSort === 'alpha') return (a.name || '').localeCompare(b.name || '');
-                    return (b.last_crawled?.seconds || 0) - (a.last_crawled?.seconds || 0);
-                  }).map(source => (
-                    <div key={source.id} className={`pastel-card p-6 flex justify-between items-start group hover:shadow-md transition-all ${source.is_broken ? 'border-red-200 bg-red-50/30' : ''}`}>
-                      <div className="flex items-start gap-4 overflow-hidden">
-                        <div className="mt-1">
-                          <img src={getFavicon(source.url) || ''} className="w-5 h-5 rounded-sm shadow-sm" alt="" />
-                        </div>
-                        <div className="overflow-hidden">
-                          <div className="flex items-center gap-2">
-                            <p className="text-lg font-bold text-[#2D3A29] truncate">{source.name}</p>
-                            {source.url.includes('boards.greenhouse.io') && (
-                              <span className="text-[8px] font-bold uppercase tracking-widest bg-green-500 text-white px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
-                                <Globe size={8} /> API
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs font-mono opacity-40 truncate mt-1">{source.url}</p>
-                          
-                          <div className="mt-2 flex items-center gap-3">
-                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
-                              Last: {source.last_crawled ? (source.last_crawled instanceof Timestamp ? source.last_crawled.toDate() : new Date(source.last_crawled)).toLocaleDateString() : 'Never'}
-                            </p>
-                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
-                              Jobs: {source.jobs_found || 0}
-                            </p>
-                          </div>
-                          
-                          {!!source.is_broken && (
-                            <div className="mt-3 flex items-center gap-2 text-red-500">
-                              <AlertCircle size={14} />
-                              <p className="text-[10px] font-medium italic leading-tight">
-                                {source.last_error || 'Connection failed'}
-                              </p>
+                    
+                    const getTime = (s: Source) => {
+                      const date = s.created_at || s.last_crawled;
+                      if (!date) return 0;
+                      if (typeof date.toMillis === 'function') return date.toMillis();
+                      if (typeof date.toDate === 'function') return date.toDate().getTime();
+                      if (date.seconds !== undefined) return date.seconds * 1000 + (date.nanoseconds || 0) / 1000000;
+                      const d = new Date(date);
+                      return isNaN(d.getTime()) ? 0 : d.getTime();
+                    };
+                    
+                    return getTime(b) - getTime(a);
+                  }).map(source => {
+                      const recentlyScouted = isScoutedInLast24h(source.last_crawled);
+                      return (
+                        <div key={source.id} className={`pastel-card p-6 flex justify-between items-start group hover:shadow-md transition-all ${source.is_broken ? (recentlyScouted ? 'border-blue-200 bg-blue-50/30' : 'border-red-200 bg-red-50/30') : ''}`}>
+                          <div className="flex items-start gap-4 overflow-hidden">
+                            <div className="mt-1">
+                              <img 
+                                src={faviconErrors[source.url] ? `https://ui-avatars.com/api/?name=${encodeURIComponent(source.name || 'S')}&background=random` : getFavicon(source.url) || ''} 
+                                onError={() => handleFaviconError(source.url)}
+                                className="w-5 h-5 rounded-sm shadow-sm" 
+                                alt="" 
+                              />
                             </div>
-                          )}
-                        </div>
-                      </div>
+                            <div className="overflow-hidden">
+                              <div className="flex items-center gap-2">
+                                <p className="text-lg font-bold text-[#2D3A29] truncate">{source.name}</p>
+                                {source.url.includes('boards.greenhouse.io') && (
+                                  <span className="text-[8px] font-bold uppercase tracking-widest bg-green-500 text-white px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+                                    <Globe size={8} /> API
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs font-mono opacity-40 truncate mt-1">{source.url}</p>
+                              
+                              <div className="mt-2 flex items-center gap-3">
+                                <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
+                                  Last: {(() => {
+                                    if (!source.last_crawled) return 'Never';
+                                    const date = source.last_crawled instanceof Timestamp ? source.last_crawled.toDate() : new Date(source.last_crawled);
+                                    const now = new Date();
+                                    const isToday = date.toDateString() === now.toDateString();
+                                    return isToday ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : date.toLocaleDateString();
+                                  })()}
+                                </p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest opacity-30">
+                                  Jobs: {source.jobs_found || 0}
+                                </p>
+                              </div>
+                              
+                              {!!source.is_broken && (
+                                <div className="mt-3 flex items-center gap-2 text-red-500">
+                                  <AlertCircle size={14} />
+                                  <p className="text-[10px] font-medium italic leading-tight">
+                                    {source.last_error || 'Connection failed'}
+                                  </p>
+                                </div>
+                              )}
+                              
+                              {recentlyScouted && !source.is_broken && (
+                                <div className="mt-3 flex items-center gap-2 text-emerald-500">
+                                  <CheckCircle2 size={14} />
+                                  <p className="text-[10px] font-bold uppercase tracking-widest leading-tight">
+                                    Up to date
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                       <div className="flex items-center gap-1 ml-4">
                         <a 
                           href={source.url} 
@@ -1826,7 +2065,7 @@ function AppContent() {
                           className="text-[#4A443F]/40 hover:text-[#93C5FD] transition-all p-2 hover:bg-[#93C5FD]/10 rounded-lg"
                           title="Test Crawler"
                         >
-                          <Zap size={18} />
+                          <Eye size={18} />
                         </button>
                         <button 
                           onClick={() => setSourceEditModal({
@@ -1848,7 +2087,7 @@ function AppContent() {
                         </button>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               </motion.div>
             ) : (
@@ -1906,9 +2145,18 @@ function AppContent() {
                         jobs
                           .sort((a, b) => {
                             if (jobSort === 'alpha') return a.title.localeCompare(b.title);
-                            const dateA = a.found_at instanceof Timestamp ? a.found_at.toMillis() : new Date(a.found_at).getTime();
-                            const dateB = b.found_at instanceof Timestamp ? b.found_at.toMillis() : new Date(b.found_at).getTime();
-                            return dateB - dateA;
+                            
+                            const getTime = (j: Job) => {
+                              const date = j.found_at;
+                              if (!date) return 0;
+                              if (typeof date.toMillis === 'function') return date.toMillis();
+                              if (typeof date.toDate === 'function') return date.toDate().getTime();
+                              if (date.seconds !== undefined) return date.seconds * 1000 + (date.nanoseconds || 0) / 1000000;
+                              const d = new Date(date);
+                              return isNaN(d.getTime()) ? 0 : d.getTime();
+                            };
+                            
+                            return getTime(b) - getTime(a);
                           })
                           .map((job, index) => (
                             <motion.div 
@@ -2129,9 +2377,9 @@ function AppContent() {
                               
                               <div className="space-y-4">
                                 <p className="text-sm leading-relaxed text-[#4A443F]/80">
-                                  Last scout checked <span className="font-bold text-[#2D3A29]">{lastCrawlReport.sourcesChecked} sources</span>. 
+                                  Scout processed <span className="font-bold text-[#2D3A29]">{lastCrawlReport.sourcesChecked} {lastCrawlReport.sourcesChecked === 1 ? 'source' : 'sources'}</span>. 
                                   {lastCrawlReport.sourcesUnreachable.length > 0 && (
-                                    <> {lastCrawlReport.sourcesUnreachable.length} were unreachable (<span className="italic">{lastCrawlReport.sourcesUnreachable.join(', ')}</span>).</>
+                                    <> {lastCrawlReport.sourcesUnreachable.length} {lastCrawlReport.sourcesUnreachable.length === 1 ? 'was' : 'were'} unreachable (<span className="italic">{lastCrawlReport.sourcesUnreachable.join(', ')}</span>).</>
                                   )}
                                   {lastCrawlReport.sourcesWithNoMatches > 0 && (
                                     <> {lastCrawlReport.sourcesWithNoMatches} {lastCrawlReport.sourcesWithNoMatches === 1 ? 'source' : 'sources'} returned content but had no new jobs matching your criteria.</>
@@ -2144,6 +2392,28 @@ function AppContent() {
                                 <div className="pt-4 border-t border-[#E8E4DE] flex items-center justify-between">
                                   <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">New Jobs Found</span>
                                   <span className="text-lg font-serif italic text-[#2D3A29]">{lastCrawlReport.newJobsFound}</span>
+                                </div>
+                                <div className="pt-4 flex justify-end">
+                                  <button 
+                                    onClick={async () => {
+                                      if (!user) return;
+                                      const sourcesRef = collection(db, 'users', user.uid, 'sources');
+                                      const sourcesSnapshot = await getDocs(sourcesRef);
+                                      const updatePromises = sourcesSnapshot.docs.map(d => updateDoc(d.ref, {
+                                        last_crawled: null,
+                                        jobs_found: 0,
+                                        is_broken: false,
+                                        last_error: null
+                                      }));
+                                      await Promise.all(updatePromises);
+                                      setLastCrawlReport(prev => prev ? { ...prev, sourcesSkipped: 0 } : null);
+                                      showAlert('History Cleared', 'You can now scout all sources again immediately.');
+                                    }}
+                                    className="text-[10px] uppercase tracking-widest font-bold text-[#93C5FD] hover:text-[#60A5FA] flex items-center gap-1.5 transition-colors"
+                                  >
+                                    <RefreshCw size={12} />
+                                    Clear History to Re-test
+                                  </button>
                                 </div>
                               </div>
                             </motion.div>

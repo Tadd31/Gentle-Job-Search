@@ -93,6 +93,7 @@ export {
   where, 
   orderBy, 
   limit, 
+  getDocFromServer,
   Timestamp,
   writeBatch,
   onAuthStateChanged 

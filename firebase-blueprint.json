@@ -24,6 +24,7 @@
         "is_broken": { "type": "boolean", "description": "Whether the source link is currently unreachable" },
         "last_error": { "type": "string", "description": "Last error message encountered during crawl" },
         "last_crawled": { "type": "string", "format": "date-time", "description": "Timestamp of the last successful crawl" },
+        "last_checked": { "type": "string", "format": "date-time", "description": "Timestamp of the last time the scout checked this source" },
         "jobs_found": { "type": "integer", "description": "Total number of jobs found from this source" }
       },
       "required": ["url", "name"]
