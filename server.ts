@@ -902,8 +902,10 @@ async function startServer() {
     try {
       const zip = new JSZip();
       const extensionDir = path.resolve('extension');
-      const appUrl = process.env.APP_URL || `http://localhost:3000`;
-      const frontendUrl = process.env.FRONTEND_URL || appUrl;
+      const protocol = req.headers['x-forwarded-proto'] || 'http';
+      const currentHost = req.headers.host;
+      const appUrl = (process.env.APP_URL || `${protocol}://${currentHost}`).replace(/\/$/, '');
+      const frontendUrl = (process.env.FRONTEND_URL || appUrl).replace(/\/$/, '');
 
       // Add files to ZIP
       const manifest = await fs.readFile(path.join(extensionDir, 'manifest.json'), 'utf8');
@@ -913,8 +915,8 @@ async function startServer() {
 
       // Replace placeholders in popup.js
       const popupJs = popupJsTemplate
-        .replace('__API_BASE_URL__', appUrl)
-        .replace('__FRONTEND_URL__', frontendUrl);
+        .replaceAll('__API_BASE_URL__', appUrl)
+        .replaceAll('__FRONTEND_URL__', frontendUrl);
 
       zip.file('manifest.json', manifest);
       zip.file('popup.html', popupHtml);

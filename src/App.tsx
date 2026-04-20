@@ -1534,7 +1534,7 @@ function AppContent() {
                       </ol>
                       <div className="p-4 bg-[#93C5FD]/5 border border-[#93C5FD]/10 rounded-2xl">
                         <p className="text-[10px] text-[#2D3A29]/60 leading-relaxed">
-                          <strong>Pro Tip:</strong> Make sure you are logged in to <a href="https://workscout.netlify.app/" target="_blank" className="text-[#93C5FD] underline">workscout.netlify.app</a> before using the extension. If you just logged in, you might need to close and reopen the extension popup.
+                          <strong>Pro Tip:</strong> Make sure you are logged in to <a href={window.location.origin} target="_blank" className="text-[#93C5FD] underline">{window.location.host}</a> before using the extension. If you just logged in, you might need to close and reopen the extension popup.
                         </p>
                       </div>
                     </div>

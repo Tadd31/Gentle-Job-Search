@@ -3,7 +3,7 @@
   "name": "The Job Scout Clipper",
   "version": "1.0.0",
   "description": "Clip job boards and career pages directly to your Job Scout.",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "scripting"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

@@ -12,11 +12,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   const siteUrlInput = document.getElementById('site-url');
   const clipBtn = document.getElementById('clip-btn');
 
+  let tabDescription = '';
+
   // 1. Get current tab info
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab) {
     siteUrlInput.value = tab.url;
     siteNameInput.value = tab.title.split(' - ')[0].split(' | ')[0];
+    
+    // Attempt to get description from tab metadata
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const meta = document.querySelector('meta[name="description"]');
+          return meta ? meta.getAttribute('content') : null;
+        }
+      });
+      if (result) tabDescription = result;
+    } catch (e) {
+      console.warn('Could not inject script for description extraction', e);
+    }
   }
 
   // 2. Check if user is authenticated
@@ -64,7 +80,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         body: JSON.stringify({
           name: siteName,
           url: siteUrl,
-          type: 'manual'
+          description: tabDescription,
+          type: 'extension'
         }),
       });
 
