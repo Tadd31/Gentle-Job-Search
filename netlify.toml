@@ -1,0 +1,10 @@
+[[redirects]]
+  from = "/api/*"
+  to = "https://ais-pre-63gtcd7ttniospt2fjvvyh-543801145345.europe-west2.run.app/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

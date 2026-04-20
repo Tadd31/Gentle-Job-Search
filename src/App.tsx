@@ -41,7 +41,6 @@ import {
   Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from '@google/genai';
 import Papa from 'papaparse';
 import confetti from 'canvas-confetti';
 import { 
@@ -71,6 +70,9 @@ import {
 } from './firebase';
 
 const ZEN_SOUND = 'https://actions.google.com/sounds/v1/water/water_lapping_wind.ogg';
+
+// API Configuration
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -277,7 +279,7 @@ function AppContent() {
       setIsAuthReady(true);
       
       // Sync session with server for browser extension
-      fetch('/api/auth/session', {
+      fetch(`${API_BASE_URL}/api/auth/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(u ? {
@@ -861,11 +863,6 @@ function AppContent() {
     let sourcesWithNoMatches = 0;
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('GEMINI_API_KEY is not defined. Please check your environment settings.');
-      }
-
       // Move existing 'new' jobs to 'past'
       const jobsRef = collection(db, 'users', user.uid, 'jobs');
       const newJobsQuery = query(jobsRef, where('status', '==', 'new'));
@@ -884,33 +881,8 @@ function AppContent() {
       const allJobsSnapshot = await getDocs(jobsRef);
       const existingUrls = new Set(allJobsSnapshot.docs.map(d => d.data().link));
 
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = null; // AI logic moved to server for security and hosting compatibility
       
-      const generateWithRetry = async (prompt: string, maxRetries = 5) => {
-        let lastError: any;
-        for (let i = 0; i < maxRetries; i++) {
-          try {
-            const result = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: prompt,
-              config: { responseMimeType: 'application/json' }
-            });
-            return result;
-          } catch (err: any) {
-            lastError = err;
-            const errStr = JSON.stringify(err);
-            if (err.message?.includes('429') || err.status === 429 || errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED')) {
-              const waitTime = Math.pow(2, i) * 5000 + Math.random() * 1000;
-              setCrawlProgress(`Rate limited. Retrying in ${Math.round(waitTime/1000)}s...`);
-              await new Promise(resolve => setTimeout(resolve, waitTime));
-              continue;
-            }
-            throw err;
-          }
-        }
-        throw lastError;
-      };
-
       const sortedSources = [...sources].sort((a, b) => 
         (a.name || a.url).toLowerCase().localeCompare((b.name || b.url).toLowerCase())
       );
@@ -947,7 +919,7 @@ function AppContent() {
               const boardId = ghMatch ? ghMatch[1] : 'vml';
               setCrawlProgress(`Fetching Greenhouse API for ${boardId}...`);
               try {
-                const res = await fetch(`/api/greenhouse-jobs?boardId=${boardId}`);
+                const res = await fetch(`${API_BASE_URL}/api/greenhouse-jobs?boardId=${boardId}`);
                 if (res.ok) {
                   const data = await res.json();
                   if (data.jobs) return data.jobs.map((j: any) => ({
@@ -968,7 +940,7 @@ function AppContent() {
             if (source.url.includes('careers.publicisgroupe.com')) {
               setCrawlProgress(`Fetching Publicis Groupe Unified API...`);
               try {
-                const res = await fetch(`/api/publicis-jobs?limit=4000`);
+                const res = await fetch(`${API_BASE_URL}/api/publicis-jobs?limit=4000`);
                 if (res.ok) {
                   const data = await res.json();
                   if (data.jobs) return data.jobs.map((j: any) => {
@@ -997,7 +969,7 @@ function AppContent() {
               const companyId = finalSrMatch[1];
               setCrawlProgress(`Fetching SmartRecruiters API for ${companyId}...`);
               try {
-                const res = await fetch(`/api/smartrecruiters-jobs?company=${companyId}`);
+                const res = await fetch(`${API_BASE_URL}/api/smartrecruiters-jobs?company=${companyId}`);
                 if (res.ok) {
                   const data = await res.json();
                   if (data.content) return data.content.map((j: any) => ({
@@ -1021,7 +993,7 @@ function AppContent() {
           // 2. FALLBACK TO CONTENT CRAWLING + AI EXTRACTION
           if (extractedJobs.length === 0) {
             setCrawlProgress(`Fetching content from ${source.name || source.url}...`);
-            const contentRes = await fetchWithTimeout(`/api/fetch-content?url=${encodeURIComponent(source.url)}`);
+            const contentRes = await fetchWithTimeout(`${API_BASE_URL}/api/fetch-content?url=${encodeURIComponent(source.url)}`);
             
             if (!contentRes.ok) {
               let errorDetail = contentRes.statusText;
@@ -1078,77 +1050,34 @@ function AppContent() {
             if (extractedJobs.length === 0) {
               setCrawlProgress(`Analyzing jobs for ${source.name || source.url}...`);
               
-              const keywordsText = profile.keywords?.trim() || 'No specific keywords (show all relevant jobs)';
-              const locationText = profile.location?.trim() || 'Any location';
-              const minSalaryText = profile.min_salary ? `£${profile.min_salary.toLocaleString()}` : 'No minimum salary';
-
-              const modeInstructions = profile.search_mode === 'strict' 
-                ? (profile.keywords?.trim() 
-                    ? `STRICT MODE: Only include jobs that explicitly match at least one of the keywords: ${profile.keywords}.`
-                    : `STRICT MODE: No keywords specified. Include all jobs found in the text.`)
-                : `DISCOVERY MODE: Use keywords (${profile.keywords || 'None'}) AND the user's LinkedIn profile (${profile.linkedin_url || 'Not provided'}) to semantically discover relevant roles.`;
-
               const approvedContext = jobs.filter(j => j.status === 'approved').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
               const rejectedContext = jobs.filter(j => j.status === 'rejected').slice(0, 5).map(j => `- ${j.title} at ${j.company}`).join('\n');
 
-              const prompt = `
-                Extract job listings from the following text. 
-                
-                USER CONTEXT:
-                - Keywords: ${keywordsText}
-                - Location: ${locationText}
-                - Minimum Salary: ${minSalaryText}
-                
-                LEARNING FROM HISTORY:
-                The user has APPROVED these types of jobs:
-                ${approvedContext || 'None yet'}
-                
-                The user has REJECTED these types of jobs:
-                ${rejectedContext || 'None yet'}
-                
-                SEARCH MODE:
-                ${modeInstructions}
-                
-                CRITICAL FILTERING CRITERIA:
-                1. Be thorough but precise. 
-                2. KEYWORD MATCHING: ${profile.keywords?.trim() ? 'Only include jobs matching the keywords.' : 'Include all jobs found.'}
-                3. LOCATION PRECISION: ${profile.location?.trim() ? `The user is looking for jobs in ${profile.location}. Be flexible with sub-regions.` : 'No location filter specified.'}
-                4. SALARY EXTRACTION: Look for salary information.
-                5. SENIORITY EXTRACTION: Look for seniority level.
-                6. MATCHING: Even if a job title doesn't exactly match a keyword, if it's a similar role (e.g., "Application Developer" for "Software Engineer"), include it.
-                7. NO MATCHES: If no jobs match the criteria, return an empty array [].
-
-                LINK EXTRACTION RULES:
-                - Find the MOST DIRECT link to the specific job description page.
-                - If the link is relative, make it absolute using the source URL: ${source.url}
-
-                Text to analyze:
-                ${text}
-
-                Return a JSON array of objects with these fields:
-                - id (a unique string based on title and company)
-                - title
-                - company
-                - location
-                - link (absolute URL)
-                - description (short summary)
-                - salary (e.g., "£40,000 - £50,000" or "Unknown")
-                - seniority (e.g., "Senior")
-              `;
-
-              const result = await generateWithRetry(prompt);
-              const resultText = result.text || '[]';
-              
-              // Robust JSON extraction
               try {
-                const jsonMatch = resultText.match(/\[[\s\S]*\]/);
-                if (jsonMatch) {
-                  extractedJobs = JSON.parse(jsonMatch[0]);
+                const aiRes = await fetch(`${API_BASE_URL}/api/ai-extract`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    text,
+                    keywords: profile.keywords,
+                    searchMode: profile.search_mode,
+                    location: profile.location,
+                    minSalary: profile.min_salary,
+                    approvedContext,
+                    rejectedContext,
+                    sourceUrl: source.url
+                  })
+                });
+
+                if (aiRes.ok) {
+                  const aiData = await aiRes.json();
+                  extractedJobs = aiData.jobs || [];
                 } else {
-                  extractedJobs = JSON.parse(resultText);
+                  console.error('Server-side AI extraction failed');
+                  extractedJobs = [];
                 }
               } catch (e) {
-                console.error('Failed to parse Gemini JSON:', resultText);
+                console.error('Failed to call AI extraction endpoint:', e);
                 extractedJobs = [];
               }
             }
@@ -1506,7 +1435,7 @@ function AppContent() {
                         Download the extension package and install it in your Chrome-based browser to start clipping sources instantly.
                       </p>
                       <a 
-                        href="/api/extension/download" 
+                        href={`${API_BASE_URL}/api/extension/download`} 
                         className="btn-primary w-full py-4 flex items-center justify-center gap-3 no-underline"
                       >
                         <Download size={18} />

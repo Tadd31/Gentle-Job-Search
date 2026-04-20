@@ -6,6 +6,7 @@ import 'dotenv/config';
 import fs from 'fs-extra';
 import JSZip from 'jszip';
 import cookieParser from 'cookie-parser';
+import { GoogleGenAI } from '@google/genai';
 
 const HOLDING_COMPANY_WORKDAY_MAP: Record<string, { host: string, tenant: string, siteId: string, brandName?: string }> = {
   'droga5.com': { host: 'accenture.wd3.myworkdayjobs.com', tenant: 'accenture', siteId: 'External', brandName: 'Droga5' },
@@ -739,56 +740,68 @@ async function startServer() {
             ? `https://${host}/wday/cxs/recruiting/rest/${tenant}/${siteId}/jobs`
             : `https://${host}/wday/cxs/recruiting/rest/${tenant}/jobs`;
           
-          console.log(`Holding company fallback triggered for ${urlStr}. Target API: ${apiEndpoint}, Search: ${brandName}`);
-          
-          // Try with brandName first
-          let accRes = await fetch(apiEndpoint, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'User-Agent': commonHeaders['User-Agent']
-            },
-            body: JSON.stringify({ appliedFacets: {}, limit: 50, offset: 0, searchText: brandName })
-          });
-          
-          let accData = accRes.ok ? await accRes.json() : null;
+          // Extract search context from URL
+          const urlObj = new URL(urlStr);
+          const urlSearch = urlObj.searchParams.get('q') || urlObj.searchParams.get('aoi') || urlObj.searchParams.get('searchText') || '';
+          const finalSearchText = urlSearch || brandName || '';
 
-          // If no jobs found with brandName, try a broader search if brandName had a number (like Droga5 -> Droga)
-          if ((!accData || !accData.jobPostings || accData.jobPostings.length === 0) && brandName && /\d/.test(brandName)) {
-            const broaderBrand = brandName.replace(/\d+$/, '');
-            console.log(`No jobs for ${brandName}, trying broader search: ${broaderBrand}`);
-            accRes = await fetch(apiEndpoint, {
+          console.log(`Holding company fallback triggered for ${urlStr}. Target API: ${apiEndpoint}, Search: ${finalSearchText}`);
+          
+          let allJobPostings: any[] = [];
+          let offset = 0;
+          const limit = 50;
+          let hasMore = true;
+          let attempts = 0;
+
+          while (hasMore && attempts < 10) { // Fetch up to 500 jobs
+            attempts++;
+            const accRes = await fetch(apiEndpoint, {
               method: 'POST',
               headers: { 
                 'Content-Type': 'application/json',
                 'User-Agent': commonHeaders['User-Agent']
               },
-              body: JSON.stringify({ appliedFacets: {}, limit: 50, offset: 0, searchText: broaderBrand })
+              body: JSON.stringify({ 
+                appliedFacets: {}, 
+                limit, 
+                offset, 
+                searchText: finalSearchText 
+              })
             });
-            if (accRes.ok) accData = await accRes.json();
+            
+            if (!accRes.ok) break;
+            const accData = await accRes.json();
+            
+            if (accData.jobPostings && accData.jobPostings.length > 0) {
+              allJobPostings = [...allJobPostings, ...accData.jobPostings];
+              offset += limit;
+              hasMore = allJobPostings.length < (accData.total || 0) && accData.jobPostings.length === limit;
+            } else {
+              hasMore = false;
+            }
           }
           
-          if (accData && accData.jobPostings && accData.jobPostings.length > 0) {
-            const jobsList = accData.jobPostings.map((j: any) => ({
+          if (allJobPostings.length > 0) {
+            const jobsList = allJobPostings.map((j: any) => ({
               id: `wd-${j.bulletinId || j.jobPostingId || Math.random().toString(36).substring(7)}`,
               title: j.title,
-              company: brandName,
+              company: brandName || (urlStr.includes('accenture') ? 'Accenture' : 'Unknown'),
               location: j.locationsText || 'Unknown',
               link: `https://${host}/en-US/${siteId || tenant}${j.externalPath}`,
-              description: `Found via ${host} API.`,
+              description: `Found via ${host} API. ${j.postedOn || ''}`,
               salary: 'Unknown',
               seniority: 'Unknown'
             }));
             
-            const jobsText = jobsList.map((j: any) => `[${j.title}](${j.link}) - ${j.location}`).join('\n');
-            console.log(`Returning ${jobsList.length} structured jobs for ${brandName}`);
+            const jobsText = jobsList.slice(0, 10).map((j: any) => `[${j.title}](${j.link}) - ${j.location}`).join('\n');
+            console.log(`Returning ${jobsList.length} structured jobs for ${brandName || 'Holding Co'}`);
             return res.json({ 
-              text: `Found ${brandName} jobs via ${host} API:\n\n${jobsText}`,
+              text: `Found ${jobsList.length} jobs via ${host} API:\n\n${jobsText}${jobsList.length > 10 ? '\n...and more.' : ''}`,
               jobs: jobsList,
               detectedBoard: 'Workday'
             });
           } else {
-            console.log(`No jobs found in API response for ${brandName} or API request failed.`);
+            console.log(`No jobs found in API response for ${finalSearchText} or API request failed.`);
           }
         } catch (e: any) {
           console.error(`Holding company fallback error for ${urlStr}:`, e.message);
@@ -894,6 +907,62 @@ async function startServer() {
     } catch (error: any) {
       console.error(`Greenhouse fetch error for ${boardId}:`, error.message);
       res.status(500).json({ error: 'Failed to connect to Greenhouse API' });
+    }
+  });
+
+  // AI Extraction Endpoint
+  app.post('/api/ai-extract', async (req, res) => {
+    const { text, keywords, searchMode, location, minSalary, approvedContext, rejectedContext, sourceUrl } = req.body;
+    
+    if (!text) return res.status(400).json({ error: 'Text content is required' });
+    
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'AI services not configured on server.' });
+
+    const ai = new GoogleGenAI(apiKey);
+    
+    const prompt = `
+      Extract a list of job opportunities from the following text content of a career page.
+      
+      USER PROFILE CONTEXT:
+      - Keywords: ${keywords}
+      - Location: ${location}
+      - Minimum Salary: ${minSalary}
+      - Search Mode: ${searchMode} (strict vs discovery)
+      
+      LEARNING FROM HISTORY:
+      The user previously APPROVED these:
+      ${approvedContext || 'None yet'}
+      
+      The user previously REJECTED these:
+      ${rejectedContext || 'None yet'}
+      
+      INSTRUCTIONS:
+      1. Extract all relevant jobs matching the user's intent.
+      2. For each job, return: title, company, location, link, description, salary, seniority.
+      3. If the link is relative, make it absolute using the source URL: ${sourceUrl}
+      4. Try to infer seniority (Junior, Mid, Senior, Lead, Director) from the title.
+      5. Output ONLY a valid JSON array of objects.
+      
+      CONTENT:
+      ${text.substring(0, 20000)}
+    `;
+
+    try {
+      const model = ai.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
+      
+      // Clean potential markdown around JSON
+      const cleaned = responseText.replace(/```json\n?/, '').replace(/```\n?/, '').trim();
+      const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No valid JSON array found');
+      
+      const jobs = JSON.parse(jsonMatch[0]);
+      res.json({ jobs });
+    } catch (error: any) {
+      console.error('AI Extraction error:', error.message);
+      res.status(500).json({ error: 'AI extraction failed' });
     }
   });
 
